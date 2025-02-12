@@ -33,6 +33,7 @@ namespace GameTranslationOverlay
         // ホットキーのID
         private const int HOTKEY_ID_CLICK_THROUGH = 1;
         private const int HOTKEY_ID_OVERLAY = 2;
+        private const int HOTKEY_ID_REGION_SELECT = 3;
 
         // メッセージ定数
         private const int WM_HOTKEY = 0x0312;
@@ -42,8 +43,9 @@ namespace GameTranslationOverlay
         private const uint WS_EX_LAYERED = 0x80000;
         private const uint WS_EX_TRANSPARENT = 0x20;
 
-        // クリックスルーの状態管理
+        // 状態管理
         private bool isClickThrough = false;
+        private bool isRegionSelectMode = false;
 
         public Form1()
         {
@@ -65,9 +67,10 @@ namespace GameTranslationOverlay
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
-            // ホットキーを登録 (Ctrl + Shift + C と Ctrl + Shift + O)
+            // ホットキーを登録
             RegisterHotKey(this.Handle, HOTKEY_ID_CLICK_THROUGH, MOD_CONTROL | MOD_SHIFT, (int)Keys.C);
             RegisterHotKey(this.Handle, HOTKEY_ID_OVERLAY, MOD_CONTROL | MOD_SHIFT, (int)Keys.O);
+            RegisterHotKey(this.Handle, HOTKEY_ID_REGION_SELECT, MOD_CONTROL | MOD_SHIFT, (int)Keys.R);
         }
 
         protected override void WndProc(ref Message m)
@@ -87,6 +90,11 @@ namespace GameTranslationOverlay
                     case HOTKEY_ID_OVERLAY:
                         this.Visible = !this.Visible;
                         break;
+
+                    case HOTKEY_ID_REGION_SELECT:
+                        isRegionSelectMode = !isRegionSelectMode;
+                        this.Cursor = isRegionSelectMode ? Cursors.Cross : Cursors.Default;
+                        break;
                 }
             }
         }
@@ -96,6 +104,7 @@ namespace GameTranslationOverlay
             // ホットキーの登録を解除
             UnregisterHotKey(this.Handle, HOTKEY_ID_CLICK_THROUGH);
             UnregisterHotKey(this.Handle, HOTKEY_ID_OVERLAY);
+            UnregisterHotKey(this.Handle, HOTKEY_ID_REGION_SELECT);
             base.OnFormClosing(e);
         }
 
