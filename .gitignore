@@ -17,3 +17,12 @@ bld/
 [Bb]in/
 [Oo]bj/
 [Ll]og/
+
+# NuGet Packages
+packages/
+*.nupkg
+*.nuspec
+
+# Tesseract files
+tessdata/*
+!tessdata/.gitkeep
