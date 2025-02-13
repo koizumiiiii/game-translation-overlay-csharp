@@ -1,12 +1,36 @@
-# Visual Studio files
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+.venv/
+.env
+
+# Visual Studio / C#
 .vs/
 bin/
 obj/
 *.user
 *.userosscache
 *.sln.docstates
-
-# Build results
 [Dd]ebug/
 [Rr]elease/
 x64/
@@ -17,8 +41,6 @@ bld/
 [Bb]in/
 [Oo]bj/
 [Ll]og/
-
-# NuGet Packages
 packages/
 *.nupkg
 *.nuspec
@@ -26,3 +48,9 @@ packages/
 # Tesseract files
 tessdata/*
 !tessdata/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
