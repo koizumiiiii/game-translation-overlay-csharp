@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import openai
+from openai import ChatCompletion  # 直接インポートすることで新インターフェースを利用
 
 def get_diff() -> str:
     """
@@ -40,7 +41,8 @@ Code Diff:
 
 Please output your review in Markdown format.
 """
-    response = openai.ChatCompletion.create(
+    # 新しいインターフェースを利用して ChatCompletion を呼び出す
+    response = ChatCompletion.create(
         model="gpt-4",
         messages=[
             {"role": "system", "content": "You are an expert code reviewer."},
