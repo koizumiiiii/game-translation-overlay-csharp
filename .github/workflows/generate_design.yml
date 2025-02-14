@@ -1,0 +1,45 @@
+name: Generate Design Proposal
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate_design:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install openai pyyaml requests
+
+      - name: Generate Design Proposal
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python scripts/generate_design.py '${{ github.event.issue.title }}' '${{ github.event.issue.body }}'
+
+      - name: Commit and Push Design Proposal
+        run: |
+          git config --global user.name 'github-actions'
+          git config --global user.email 'actions@github.com'
+          git add docs/design_proposal.md
+          git commit -m 'Auto-generate design proposal'
+          git push
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          title: 'Design Proposal for: ${{ github.event.issue.title }}'
+          body: 'Auto-generated design proposal based on issue description.'
+          branch: 'auto-design/${{ github.event.issue.number }}'
+          base: main
