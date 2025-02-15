@@ -5,16 +5,24 @@ import openai
 
 def get_diff() -> str:
     """
-    最新コミットとその1つ前のコミット間の差分を取得する
+    最新コミットとその1つ前のコミット間の差分を取得する。
+    HEAD~1 が存在しない場合は、空ツリーと HEAD の差分を取得する。
     """
     try:
+        # HEAD~1 の存在チェック
+        subprocess.check_output(["git", "rev-parse", "HEAD~1"], universal_newlines=True)
+        # HEAD~1 が存在する場合
         diff = subprocess.check_output(
             ["git", "diff", "HEAD~1", "HEAD"],
             universal_newlines=True
         )
-    except subprocess.CalledProcessError as e:
-        print("Error obtaining git diff:", e)
-        sys.exit(1)
+    except subprocess.CalledProcessError:
+        # HEAD~1 が存在しない場合は、空ツリーとの diff を取得
+        # 4b825dc642cb6eb9a060e54bf8d69288fbee4904 は Git の空ツリーのハッシュ
+        diff = subprocess.check_output(
+            ["git", "diff", "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "HEAD"],
+            universal_newlines=True
+        )
     return diff
 
 def review_code(diff: str) -> str:
@@ -32,6 +40,7 @@ Code Diff:
 
 Please output your review in Markdown format.
 """
+    # 直接 openai.ChatCompletion.create を呼び出す
     response = openai.ChatCompletion.create(
         model="gpt-4",
         messages=[
