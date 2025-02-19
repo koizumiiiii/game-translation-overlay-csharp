@@ -3,9 +3,11 @@ using System.Drawing;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
 using System.Diagnostics;
+using System.Linq;
 using GameTranslationOverlay.Core.OCR;
 using GameTranslationOverlay.Forms;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace GameTranslationOverlay
 {
@@ -51,6 +53,7 @@ namespace GameTranslationOverlay
         private Point? _selectionStart = null;
         private Panel _selectionBox = null;
         private readonly List<TranslationBox> _translationBoxes = new List<TranslationBox>();
+        private readonly List<Form> _translationContainers = new List<Form>();
         private Panel _selectionOverlay = null;
 
         public OverlayForm(IOcrEngine ocrEngine)
@@ -185,7 +188,6 @@ namespace GameTranslationOverlay
         {
             if (!_isRegionSelectMode || _selectionStart == null) return;
 
-            // 選択領域の座標をスクリーン座標に変換
             var screenPoint = _selectionOverlay.PointToScreen(new Point(
                 Math.Min(e.X, _selectionStart.Value.X),
                 Math.Min(e.Y, _selectionStart.Value.Y)
@@ -200,55 +202,75 @@ namespace GameTranslationOverlay
 
             if (region.Width > 10 && region.Height > 10)
             {
-                ProcessSelectedRegion(region);
+                _ = ProcessSelectedRegionAsync(region);
             }
 
             ExitRegionSelectMode();
         }
 
-        private async void ProcessSelectedRegion(Rectangle region)
+        private async Task ProcessSelectedRegionAsync(Rectangle region)
         {
             Debug.WriteLine($"領域選択完了: X={region.X}, Y={region.Y}, Width={region.Width}, Height={region.Height}");
             try
             {
-                var text = await _ocrEngine.RecognizeTextAsync(region);
-                Debug.WriteLine($"OCR結果: {text}");
-                if (!string.IsNullOrWhiteSpace(text))
+                var results = await OcrTest.RunTests(region);
+                if (!results.Any())
                 {
-                    // TranslationBoxを作成
-                    var translationBox = new TranslationBox(region, text);
-                    _translationBoxes.Add(translationBox);
-
-                    // TranslationBox専用のコンテナを作成
-                    var container = new Form
-                    {
-                        FormBorderStyle = FormBorderStyle.None,
-                        ShowInTaskbar = false,
-                        TopMost = true,
-                        StartPosition = FormStartPosition.Manual,
-                        Location = translationBox.Location,
-                        Size = translationBox.Size,
-                        Opacity = 0.8,
-                        BackColor = Color.Black
-                    };
-
-                    // TranslationBoxをコンテナに追加
-                    container.Controls.Add(translationBox);
-                    translationBox.Location = Point.Empty; // コンテナ内での位置をリセット
-                    translationBox.Dock = DockStyle.Fill;  // コンテナいっぱいに表示
-
-                    // コンテナを表示
-                    container.Show();
-                    Debug.WriteLine($"Translation container created at {container.Location} with size {container.Size}");
+                    Debug.WriteLine("OCR failed: No results available");
+                    return;
                 }
-                else
+
+                // 最も精度の高い結果を取得
+                var bestResult = results.OrderByDescending(r => r.Accuracy).First();
+                var resultText = bestResult.RecognizedText.Trim();
+
+                // 認識結果の表示用テキストを整形
+                var text = $"Configuration:\n{bestResult.Configuration}\n" +
+                          $"Accuracy: {bestResult.Accuracy:P}\n" +
+                          $"Time: {bestResult.ProcessingTime}ms\n" +
+                          $"-------------------\n" +
+                          $"Recognized Text:\n{resultText}";
+
+                // 結果を表示
+                var translationBox = new TranslationBox(region, text);
+                _translationBoxes.Add(translationBox);
+
+                // TranslationBox専用のコンテナを作成
+                var container = new Form
                 {
-                    Debug.WriteLine("OCR結果が空でした");
+                    FormBorderStyle = FormBorderStyle.None,
+                    ShowInTaskbar = false,
+                    TopMost = true,
+                    StartPosition = FormStartPosition.Manual,
+                    Location = translationBox.Location,
+                    Size = translationBox.Size,
+                    Opacity = 0.8,
+                    BackColor = Color.Black
+                };
+
+                // TranslationBoxをコンテナに追加
+                container.Controls.Add(translationBox);
+                translationBox.Location = Point.Empty;
+                translationBox.Dock = DockStyle.Fill;
+
+                // コンテナを表示して管理リストに追加
+                container.Show();
+                _translationContainers.Add(container);
+
+                // デバッグ出力
+                Debug.WriteLine("OCR Results:");
+                foreach (var result in results)
+                {
+                    Debug.WriteLine($"Config: {result.Configuration}");
+                    Debug.WriteLine($"Accuracy: {result.Accuracy:P}");
+                    Debug.WriteLine($"Time: {result.ProcessingTime}ms");
+                    Debug.WriteLine($"Text:\n{result.RecognizedText}");
+                    Debug.WriteLine("----------------------");
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"OCR Error: {ex.Message}");
+                Debug.WriteLine($"Test Error: {ex.Message}");
                 Debug.WriteLine($"Stack trace: {ex.StackTrace}");
             }
         }
@@ -280,10 +302,15 @@ namespace GameTranslationOverlay
 
             foreach (var box in _translationBoxes)
             {
-                this.Controls.Remove(box);
                 box.Dispose();
             }
             _translationBoxes.Clear();
+
+            foreach (var container in _translationContainers)
+            {
+                container.Dispose();
+            }
+            _translationContainers.Clear();
 
             base.OnFormClosing(e);
         }

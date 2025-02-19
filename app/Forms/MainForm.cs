@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
 using GameTranslationOverlay.Core.OCR;
+using System.Threading.Tasks;
 
 namespace GameTranslationOverlay
 {
@@ -19,17 +20,31 @@ namespace GameTranslationOverlay
 
         private OverlayForm _overlayForm;
         private TesseractOcrEngine _ocrEngine;
+        private Button _benchmarkButton;
 
         public MainForm()
         {
             Debug.WriteLine("MainForm: コンストラクタ開始");
             InitializeComponent();
             InitializeServices();
+            InitializeBenchmarkButton();
 
             // 常に最前面に表示
             SetWindowPos(this.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 
             Debug.WriteLine("MainForm: コンストラクタ完了");
+        }
+
+        private void InitializeBenchmarkButton()
+        {
+            _benchmarkButton = new Button
+            {
+                Text = "Run OCR Benchmark",
+                Location = new Point(12, 12),
+                Size = new Size(120, 30)
+            };
+            _benchmarkButton.Click += async (sender, e) => await RunBenchmark();
+            this.Controls.Add(_benchmarkButton);
         }
 
         private async void InitializeServices()
@@ -57,6 +72,39 @@ namespace GameTranslationOverlay
                     MessageBoxIcon.Error
                 );
                 Application.Exit();
+            }
+        }
+
+        private async Task RunBenchmark()
+        {
+            try
+            {
+                _benchmarkButton.Enabled = false;
+                _benchmarkButton.Text = "Running...";
+
+                var test = new Core.OCR.Benchmark.OcrBenchmarkTest();
+                await Task.Run(async () => await test.RunAllTests());
+
+                MessageBox.Show(
+                    "ベンチマーク完了。詳細はログを確認してください。",
+                    "Benchmark Complete",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information
+                );
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"ベンチマークエラー: {ex.Message}",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+            finally
+            {
+                _benchmarkButton.Enabled = true;
+                _benchmarkButton.Text = "Run OCR Benchmark";
             }
         }
 

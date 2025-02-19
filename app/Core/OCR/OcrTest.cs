@@ -1,128 +1,165 @@
-﻿using System.Collections.Generic;
-using System.Diagnostics;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
+﻿using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.Threading.Tasks;
-using System;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Drawing.Drawing2D;
 using Tesseract;
 
-public class OcrTest
+namespace GameTranslationOverlay.Core.OCR
 {
-    private const string TEST_TEXT = "This is a sample game text";
-    public record TestResult(
-        string Configuration,
-        string RecognizedText,
-        double Accuracy,
-        long ProcessingTime
-    );
-
-    public static async Task<List<TestResult>> RunTests(Rectangle region)
+    public class OcrTest
     {
-        var results = new List<TestResult>();
-        var configurations = new[]
+        private const int MIN_FONT_SIZE_PIXELS = 10;
+
+        public class TestResult
         {
-            // エンジンモードの組み合わせ
-            new { Mode = EngineMode.Default, Psm = "3", PreProcess = false },
-            new { Mode = EngineMode.LstmOnly, Psm = "3", PreProcess = false },
-            new { Mode = EngineMode.LstmOnly, Psm = "6", PreProcess = false },
-            new { Mode = EngineMode.LstmOnly, Psm = "7", PreProcess = false },
-            new { Mode = EngineMode.LstmOnly, Psm = "7", PreProcess = true },
-            // 他の組み合わせを追加
-        };
+            public string Configuration { get; }
+            public string RecognizedText { get; }
+            public double Accuracy { get; }
+            public long ProcessingTime { get; }
 
-        foreach (var config in configurations)
+            public TestResult(string configuration, string recognizedText, double accuracy, long processingTime)
+            {
+                Configuration = configuration;
+                RecognizedText = recognizedText;
+                Accuracy = accuracy;
+                ProcessingTime = processingTime;
+            }
+        }
+
+        public static async Task<List<TestResult>> RunTests(Rectangle region)
         {
-            var stopwatch = new Stopwatch();
-            stopwatch.Start();
+            return await Task.Run(() =>
+            {
+                var results = new List<TestResult>();
 
-            using var engine = new TesseractEngine(@"./tessdata", "eng", config.Mode);
-            using var bitmap = new Bitmap(region.Width, region.Height);
-            using var graphics = Graphics.FromImage(bitmap);
+                // フォントサイズが小さい場合のスケーリング係数を計算
+                double scaleFactor = CalculateOptimalScale(region.Height);
 
-            if (config.PreProcess)
+                var configurations = new[]
+                {
+                    // 基本設定（スケーリングあり/なし）
+                    new { Mode = EngineMode.Default, Psm = PageSegMode.SingleBlock, Scale = scaleFactor },
+                    new { Mode = EngineMode.Default, Psm = PageSegMode.Auto, Scale = scaleFactor },
+                    
+                    // スケーリングが不要な場合は元のサイズでも試行
+                    new { Mode = EngineMode.Default, Psm = PageSegMode.SingleBlock, Scale = 1.0 },
+                    new { Mode = EngineMode.Default, Psm = PageSegMode.Auto, Scale = 1.0 }
+                };
+
+                var tessDataPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tessdata");
+                Debug.WriteLine($"Tesseract data path: {tessDataPath}");
+                Debug.WriteLine($"Region height: {region.Height}px, Scale factor: {scaleFactor}");
+
+                foreach (var config in configurations)
+                {
+                    var stopwatch = new Stopwatch();
+                    stopwatch.Start();
+
+                    try
+                    {
+                        using (var engine = new TesseractEngine(tessDataPath, "eng+jpn", config.Mode))
+                        using (var bitmap = new Bitmap(region.Width, region.Height))
+                        using (var graphics = Graphics.FromImage(bitmap))
+                        {
+                            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                            graphics.SmoothingMode = SmoothingMode.HighQuality;
+
+                            graphics.CopyFromScreen(region.Location, Point.Empty, region.Size);
+
+                            // スケーリング処理
+                            var scaledBitmap = config.Scale != 1.0
+                                ? ScaleImage(bitmap, config.Scale)
+                                : bitmap;
+
+                            using (var pix = PixConverter.ToPix(scaledBitmap))
+                            using (var page = engine.Process(pix))
+                            {
+                                var text = page.GetText().Trim();
+                                stopwatch.Stop();
+
+                                // 認識テキストの評価
+                                double accuracy = CalculateTextQuality(text);
+
+                                results.Add(new TestResult(
+                                    $"Mode: {config.Mode}, Scale: {config.Scale:F1}",
+                                    text,
+                                    accuracy,
+                                    stopwatch.ElapsedMilliseconds
+                                ));
+
+                                Debug.WriteLine($"Configuration: {config.Mode}, Scale: {config.Scale:F1}");
+                                Debug.WriteLine($"Recognized: {text}");
+                                Debug.WriteLine($"Time: {stopwatch.ElapsedMilliseconds}ms");
+                                Debug.WriteLine("-------------------");
+                            }
+
+                            if (config.Scale != 1.0 && scaledBitmap != bitmap)
+                            {
+                                scaledBitmap.Dispose();
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"Error with configuration - Mode: {config.Mode}, Scale: {config.Scale}");
+                        Debug.WriteLine($"Error: {ex.Message}");
+                        if (ex.InnerException != null)
+                        {
+                            Debug.WriteLine($"Inner Error: {ex.InnerException.Message}");
+                        }
+                        Debug.WriteLine("-------------------");
+                    }
+                }
+
+                return results;
+            });
+        }
+
+        private static double CalculateOptimalScale(int height)
+        {
+            // 最小フォントサイズを下回る場合はスケーリングを適用
+            if (height < MIN_FONT_SIZE_PIXELS)
+            {
+                return (double)MIN_FONT_SIZE_PIXELS / height;
+            }
+            return 1.0;
+        }
+
+        private static Bitmap ScaleImage(Bitmap original, double scale)
+        {
+            int newWidth = (int)(original.Width * scale);
+            int newHeight = (int)(original.Height * scale);
+            var scaled = new Bitmap(newWidth, newHeight);
+
+            using (var graphics = Graphics.FromImage(scaled))
             {
                 graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                graphics.SmoothingMode = SmoothingMode.HighQuality;
+                graphics.DrawImage(original, 0, 0, newWidth, newHeight);
             }
 
-            graphics.CopyFromScreen(region.Location, Point.Empty, region.Size);
-
-            using var processedBitmap = config.PreProcess ? PreprocessImage(bitmap) : bitmap;
-            using var pix = PixConverter.ToPix(processedBitmap);
-            using var page = engine.Process(pix);
-
-            page.SetVariable("tesseract_pageseg_mode", config.Psm);
-            var text = page.GetText().Trim();
-
-            stopwatch.Stop();
-
-            results.Add(new TestResult(
-                $"Mode: {config.Mode}, PSM: {config.Psm}, PreProcess: {config.PreProcess}",
-                text,
-                CalculateAccuracy(text, TEST_TEXT),
-                stopwatch.ElapsedMilliseconds
-            ));
-
-            Debug.WriteLine($"Configuration: {config.Mode}, {config.Psm}, {config.PreProcess}");
-            Debug.WriteLine($"Recognized: {text}");
-            Debug.WriteLine($"Time: {stopwatch.ElapsedMilliseconds}ms");
-            Debug.WriteLine("-------------------");
+            return scaled;
         }
 
-        return results;
-    }
-
-    private static double CalculateAccuracy(string recognized, string expected)
-    {
-        // 単純なレーベンシュタイン距離を使用
-        int distance = ComputeLevenshteinDistance(recognized.ToLower(), expected.ToLower());
-        return 1.0 - ((double)distance / Math.Max(recognized.Length, expected.Length));
-    }
-
-    private static int ComputeLevenshteinDistance(string s, string t)
-    {
-        int[,] d = new int[s.Length + 1, t.Length + 1];
-
-        for (int i = 0; i <= s.Length; i++)
-            d[i, 0] = i;
-
-        for (int j = 0; j <= t.Length; j++)
-            d[0, j] = j;
-
-        for (int j = 1; j <= t.Length; j++)
-            for (int i = 1; i <= s.Length; i++)
-                d[i, j] = Math.Min(Math.Min(
-                    d[i - 1, j] + 1,
-                    d[i, j - 1] + 1),
-                    d[i - 1, j - 1] + (s[i - 1] == t[j - 1] ? 0 : 1));
-
-        return d[s.Length, t.Length];
-    }
-
-    private static Bitmap PreprocessImage(Bitmap original)
-    {
-        var processed = new Bitmap(original.Width, original.Height);
-        using (var graphics = Graphics.FromImage(processed))
+        private static double CalculateTextQuality(string text)
         {
-            var matrix = new ColorMatrix
-            {
-                Matrix33 = 1.0f,
-                Matrix00 = 1.5f,
-                Matrix11 = 1.5f,
-                Matrix22 = 1.5f
-            };
+            // 文字列の品質を評価
+            // 有効な文字（アルファベット、数字、句読点、日本語文字）の割合を計算
+            int validChars = text.Count(c =>
+                char.IsLetterOrDigit(c) ||
+                char.IsPunctuation(c) ||
+                char.IsWhiteSpace(c) ||
+                (c >= 0x3040 && c <= 0x309F) || // ひらがな
+                (c >= 0x30A0 && c <= 0x30FF) || // カタカナ
+                (c >= 0x4E00 && c <= 0x9FFF)    // 漢字
+            );
 
-            var attributes = new ImageAttributes();
-            attributes.SetColorMatrix(matrix);
-
-            graphics.DrawImage(original,
-                new Rectangle(0, 0, original.Width, original.Height),
-                0, 0, original.Width, original.Height,
-                GraphicsUnit.Pixel,
-                attributes);
+            return (double)validChars / text.Length;
         }
-        return processed;
     }
 }
