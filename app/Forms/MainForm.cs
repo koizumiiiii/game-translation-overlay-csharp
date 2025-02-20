@@ -4,7 +4,10 @@ using System.Drawing;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
 using GameTranslationOverlay.Core.OCR;
+using GameTranslationOverlay.Forms;
 using System.Threading.Tasks;
+using System.Linq;
+using System.IO;
 
 namespace GameTranslationOverlay
 {
@@ -21,18 +24,43 @@ namespace GameTranslationOverlay
         private OverlayForm _overlayForm;
         private TesseractOcrEngine _ocrEngine;
         private Button _benchmarkButton;
+        private MenuStrip _menuStrip;
 
         public MainForm()
         {
             Debug.WriteLine("MainForm: コンストラクタ開始");
             InitializeComponent();
+            InitializeBenchmarkButton();  // 先にボタンを初期化
+            InitializeMenu();            // その後でメニューを初期化
             InitializeServices();
-            InitializeBenchmarkButton();
 
             // 常に最前面に表示
             SetWindowPos(this.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 
             Debug.WriteLine("MainForm: コンストラクタ完了");
+        }
+
+        private void InitializeMenu()
+        {
+            _menuStrip = new MenuStrip();
+            var toolsMenu = new ToolStripMenuItem("Tools");
+            var ocrTestMenuItem = new ToolStripMenuItem("OCR Test");
+
+            ocrTestMenuItem.Click += (s, e) =>
+            {
+                using (var testForm = new OcrTestForm())
+                {
+                    testForm.ShowDialog(this);
+                }
+            };
+
+            toolsMenu.DropDownItems.Add(ocrTestMenuItem);
+            _menuStrip.Items.Add(toolsMenu);
+            MainMenuStrip = _menuStrip;
+            Controls.Add(_menuStrip);
+
+            // メニューの下にボタンを配置するための調整
+            _benchmarkButton.Location = new Point(12, _menuStrip.Height + 12);
         }
 
         private void InitializeBenchmarkButton()
@@ -82,8 +110,51 @@ namespace GameTranslationOverlay
                 _benchmarkButton.Enabled = false;
                 _benchmarkButton.Text = "Running...";
 
-                var test = new Core.OCR.Benchmark.OcrBenchmarkTest();
-                await Task.Run(async () => await test.RunAllTests());
+                var testScenarios = new[]
+                {
+            "dialog_text",
+            "menu_text",
+            "system_message",
+            "battle_text",
+            "item_description"
+        };
+
+                foreach (var scenario in testScenarios)
+                {
+                    Debug.WriteLine($"\nTesting scenario: {scenario}");
+                    var imagePath = Path.Combine("Core", "OCR", "Resources", "TestImages", $"{scenario}.png");
+
+                    try
+                    {
+                        using (var image = new Bitmap(imagePath))
+                        {
+                            // 画像全体を対象とするRectangleを作成
+                            var region = new Rectangle(0, 0, image.Width, image.Height);
+                            var results = await OcrTest.RunTests(region);
+
+                            // PaddleOCRの結果のみを表示
+                            var paddleResults = results.Where(r => r.EngineName == "PaddleOCR");
+                            foreach (var result in paddleResults)
+                            {
+                                Debug.WriteLine($"PaddleOCR - Time: {result.ProcessingTime}ms, Accuracy: {result.Accuracy:P2}");
+                                Debug.WriteLine($"Recognized Text:\n{result.RecognizedText}\n");
+
+                                if (result.AdditionalInfo?.Any() == true)
+                                {
+                                    foreach (var info in result.AdditionalInfo)
+                                    {
+                                        Debug.WriteLine($"{info.Key}: {info.Value}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"Error testing scenario {scenario}: {ex.Message}");
+                        continue;
+                    }
+                }
 
                 MessageBox.Show(
                     "ベンチマーク完了。詳細はログを確認してください。",
