@@ -44,7 +44,9 @@ namespace GameTranslationOverlay
         {
             _menuStrip = new MenuStrip();
             var toolsMenu = new ToolStripMenuItem("Tools");
+
             var ocrTestMenuItem = new ToolStripMenuItem("OCR Test");
+            var translationTestMenuItem = new ToolStripMenuItem("Translation Test");
 
             ocrTestMenuItem.Click += (s, e) =>
             {
@@ -54,7 +56,16 @@ namespace GameTranslationOverlay
                 }
             };
 
+            translationTestMenuItem.Click += (s, e) =>
+            {
+                using (var testForm = new TranslationTestForm())
+                {
+                    testForm.ShowDialog(this);
+                }
+            };
+
             toolsMenu.DropDownItems.Add(ocrTestMenuItem);
+            toolsMenu.DropDownItems.Add(translationTestMenuItem);
             _menuStrip.Items.Add(toolsMenu);
             MainMenuStrip = _menuStrip;
             Controls.Add(_menuStrip);
@@ -112,12 +123,12 @@ namespace GameTranslationOverlay
 
                 var testScenarios = new[]
                 {
-            "dialog_text",
-            "menu_text",
-            "system_message",
-            "battle_text",
-            "item_description"
-        };
+                    "dialog_text",
+                    "menu_text",
+                    "system_message",
+                    "battle_text",
+                    "item_description"
+                };
 
                 foreach (var scenario in testScenarios)
                 {

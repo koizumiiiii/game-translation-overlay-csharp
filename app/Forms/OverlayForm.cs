@@ -44,9 +44,14 @@ namespace GameTranslationOverlay
         // ホットキーのID
         private const int HOTKEY_ID_OVERLAY = 1;
         private const int HOTKEY_ID_REGION_SELECT = 2;
+        private const int HOTKEY_ID_CLEAR = 3;
 
         // メッセージ定数
         private const int WM_HOTKEY = 0x0312;
+
+        // リソース制限
+        private const int MAX_AREAS = 30;
+        private const long MAX_MEMORY_USAGE = 100_000_000; // 100MB
 
         private readonly IOcrEngine _ocrEngine;
         private bool _isRegionSelectMode = false;
@@ -55,11 +60,32 @@ namespace GameTranslationOverlay
         private readonly List<TranslationBox> _translationBoxes = new List<TranslationBox>();
         private readonly List<Form> _translationContainers = new List<Form>();
         private Panel _selectionOverlay = null;
+        private long _totalMemoryUsage = 0;
+        private readonly Label _hotkeyInfoLabel;
 
         public OverlayForm(IOcrEngine ocrEngine)
         {
             InitializeComponent();
             _ocrEngine = ocrEngine ?? throw new ArgumentNullException(nameof(ocrEngine));
+
+            // ホットキー情報表示用のラベルを作成
+            _hotkeyInfoLabel = new Label
+            {
+                AutoSize = true,
+                BackColor = Color.FromArgb(200, 0, 0, 0),
+                ForeColor = Color.White,
+                Font = new Font("Yu Gothic UI", 9),
+                Padding = new Padding(10),
+                Text = "ホットキー一覧:\n" +
+                       "Ctrl+Shift+O : オーバーレイ表示切替\n" +
+                       "Ctrl+Shift+R : エリア選択・翻訳開始\n" +
+                       "Ctrl+Shift+C : すべてのエリアを削除"
+            };
+
+            this.Controls.Add(_hotkeyInfoLabel);
+            _hotkeyInfoLabel.Location = new Point(10, 10);
+            _hotkeyInfoLabel.BringToFront();
+
             InitializeOverlayWindow();
             CreateSelectionOverlay();
         }
@@ -69,7 +95,7 @@ namespace GameTranslationOverlay
             _selectionOverlay = new Panel
             {
                 Dock = DockStyle.Fill,
-                BackColor = Color.FromArgb(1, 255, 255, 255), // ほぼ透明な白
+                BackColor = Color.FromArgb(1, 255, 255, 255),
                 Visible = false
             };
 
@@ -78,6 +104,7 @@ namespace GameTranslationOverlay
             _selectionOverlay.MouseUp += OverlayForm_MouseUp;
 
             this.Controls.Add(_selectionOverlay);
+            _selectionOverlay.SendToBack();
         }
 
         private void InitializeOverlayWindow()
@@ -87,19 +114,17 @@ namespace GameTranslationOverlay
             this.TopMost = true;
             this.BackColor = Color.Black;
             this.TransparencyKey = Color.Black;
-            this.Opacity = 0.01; // ほぼ透明に
+            this.Opacity = 0.01;
 
-            // 画面全体に表示
             this.Bounds = Screen.PrimaryScreen.Bounds;
 
-            // 常に最前面に表示
             SetWindowPos(this.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 
             // ホットキーの登録
             RegisterHotKey(this.Handle, HOTKEY_ID_OVERLAY, MOD_CONTROL | MOD_SHIFT, (int)Keys.O);
             RegisterHotKey(this.Handle, HOTKEY_ID_REGION_SELECT, MOD_CONTROL | MOD_SHIFT, (int)Keys.R);
+            RegisterHotKey(this.Handle, HOTKEY_ID_CLEAR, MOD_CONTROL | MOD_SHIFT, (int)Keys.C);
 
-            // 初期状態ではクリックスルー
             SetClickThrough(true);
         }
 
@@ -117,10 +142,43 @@ namespace GameTranslationOverlay
                         break;
 
                     case HOTKEY_ID_REGION_SELECT:
-                        ToggleRegionSelectMode();
+                        if (CanAddNewArea())
+                            ToggleRegionSelectMode();
+                        else
+                            MessageBox.Show("これ以上エリアを追加できません。", "制限に達しました", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        break;
+
+                    case HOTKEY_ID_CLEAR:
+                        ClearAllAreas();
                         break;
                 }
             }
+        }
+
+        private bool CanAddNewArea()
+        {
+            if (_translationBoxes.Count >= MAX_AREAS) return false;
+            if (_totalMemoryUsage > MAX_MEMORY_USAGE) return false;
+            return true;
+        }
+
+        private void ClearAllAreas()
+        {
+            foreach (var box in _translationBoxes.ToList())
+            {
+                box.RemoveHighlight();
+                box.Dispose();
+            }
+            _translationBoxes.Clear();
+
+            foreach (var container in _translationContainers.ToList())
+            {
+                container.Dispose();
+            }
+            _translationContainers.Clear();
+
+            _totalMemoryUsage = 0;
+            Debug.WriteLine("All areas cleared");
         }
 
         private void ToggleRegionSelectMode()
@@ -210,32 +268,22 @@ namespace GameTranslationOverlay
 
         private async Task ProcessSelectedRegionAsync(Rectangle region)
         {
-            Debug.WriteLine($"領域選択完了: X={region.X}, Y={region.Y}, Width={region.Width}, Height={region.Height}");
+            Debug.WriteLine($"Processing region: {region}");
             try
             {
                 var results = await OcrTest.RunTests(region);
-                if (!results.Any())
-                {
-                    Debug.WriteLine("OCR failed: No results available");
-                    return;
-                }
+                if (!results.Any()) return;
 
-                // 最も精度の高い結果を取得
-                var bestResult = results.OrderByDescending(r => r.Accuracy).First();
+                var detailedResult = results.FirstOrDefault(r => r.Configuration.Contains("Detailed"));
+                var bestResult = detailedResult ?? results.OrderByDescending(r => r.Accuracy).First();
                 var resultText = bestResult.RecognizedText.Trim();
 
-                // 認識結果の表示用テキストを整形
-                var text = $"Configuration:\n{bestResult.Configuration}\n" +
-                          $"Accuracy: {bestResult.Accuracy:P}\n" +
-                          $"Time: {bestResult.ProcessingTime}ms\n" +
-                          $"-------------------\n" +
-                          $"Recognized Text:\n{resultText}";
+                var text = $"Recognized Text:\n{resultText}";
 
-                // 結果を表示
                 var translationBox = new TranslationBox(region, text);
+                translationBox.TextChanged += async (s, e) => await HandleTextChanged(e.Region);
                 _translationBoxes.Add(translationBox);
 
-                // TranslationBox専用のコンテナを作成
                 var container = new Form
                 {
                     FormBorderStyle = FormBorderStyle.None,
@@ -248,30 +296,44 @@ namespace GameTranslationOverlay
                     BackColor = Color.Black
                 };
 
-                // TranslationBoxをコンテナに追加
                 container.Controls.Add(translationBox);
                 translationBox.Location = Point.Empty;
                 translationBox.Dock = DockStyle.Fill;
 
-                // コンテナを表示して管理リストに追加
                 container.Show();
                 _translationContainers.Add(container);
 
-                // デバッグ出力
-                Debug.WriteLine("OCR Results:");
-                foreach (var result in results)
+                // メモリ使用量の更新
+                _totalMemoryUsage += region.Width * region.Height * 4; // 4 bytes per pixel (RGBA)
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error processing region: {ex.Message}");
+                Debug.WriteLine(ex.StackTrace);
+            }
+        }
+
+        private async Task HandleTextChanged(Rectangle region)
+        {
+            try
+            {
+                var results = await OcrTest.RunTests(region);
+                if (!results.Any()) return;
+
+                var detailedResult = results.FirstOrDefault(r => r.Configuration.Contains("Detailed"));
+                var bestResult = detailedResult ?? results.OrderByDescending(r => r.Accuracy).First();
+                var resultText = bestResult.RecognizedText.Trim();
+
+                var box = _translationBoxes.FirstOrDefault(b => b.TargetRegion == region);
+                if (box != null)
                 {
-                    Debug.WriteLine($"Config: {result.Configuration}");
-                    Debug.WriteLine($"Accuracy: {result.Accuracy:P}");
-                    Debug.WriteLine($"Time: {result.ProcessingTime}ms");
-                    Debug.WriteLine($"Text:\n{result.RecognizedText}");
-                    Debug.WriteLine("----------------------");
+                    var text = $"Recognized Text:\n{resultText}";
+                    box.UpdateText(text);
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Test Error: {ex.Message}");
-                Debug.WriteLine($"Stack trace: {ex.StackTrace}");
+                Debug.WriteLine($"Error handling text change: {ex.Message}");
             }
         }
 
@@ -299,18 +361,9 @@ namespace GameTranslationOverlay
         {
             UnregisterHotKey(this.Handle, HOTKEY_ID_OVERLAY);
             UnregisterHotKey(this.Handle, HOTKEY_ID_REGION_SELECT);
+            UnregisterHotKey(this.Handle, HOTKEY_ID_CLEAR);
 
-            foreach (var box in _translationBoxes)
-            {
-                box.Dispose();
-            }
-            _translationBoxes.Clear();
-
-            foreach (var container in _translationContainers)
-            {
-                container.Dispose();
-            }
-            _translationContainers.Clear();
+            ClearAllAreas();
 
             base.OnFormClosing(e);
         }

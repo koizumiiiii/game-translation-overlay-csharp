@@ -138,6 +138,7 @@ namespace GameTranslationOverlay.Core.Translation
 
     public class TranslationResponse
     {
+        [System.Text.Json.Serialization.JsonPropertyName("translatedText")]
         public string TranslatedText { get; set; }
     }
 
