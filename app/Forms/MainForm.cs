@@ -13,7 +13,6 @@ namespace GameTranslationOverlay
 {
     public partial class MainForm : Form
     {
-        // Win32 API
         [DllImport("user32.dll")]
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
@@ -21,18 +20,53 @@ namespace GameTranslationOverlay
         private const uint SWP_NOMOVE = 0x0002;
         private const uint SWP_NOSIZE = 0x0001;
 
-        private OverlayForm _overlayForm;
-        private TesseractOcrEngine _ocrEngine;
+        // readonlyを削除
         private Button _benchmarkButton;
         private MenuStrip _menuStrip;
+        private Label _hotkeyInfoLabel;
+        private OverlayForm _overlayForm;
+        private TesseractOcrEngine _ocrEngine;
 
         public MainForm()
         {
             Debug.WriteLine("MainForm: コンストラクタ開始");
             InitializeComponent();
-            InitializeBenchmarkButton();  // 先にボタンを初期化
-            InitializeMenu();            // その後でメニューを初期化
+
+            // ホットキー情報ラベル
+            _hotkeyInfoLabel = new Label
+            {
+                AutoSize = true,
+                ForeColor = Color.Black,
+                Font = new Font("Yu Gothic UI", 9),
+                Text = "ホットキー一覧:\n" +
+                       "Ctrl+Shift+O : オーバーレイ表示切替\n" +
+                       "Ctrl+Shift+R : エリア選択・翻訳開始\n" +
+                       "Ctrl+Shift+C : すべてのエリアを削除",
+                Location = new Point(12, 12)
+            };
+            this.Controls.Add(_hotkeyInfoLabel);
+
+            // ベンチマークボタン
+            _benchmarkButton = new Button
+            {
+                Text = "Run OCR Benchmark",
+                Location = new Point(12, _hotkeyInfoLabel.Bottom + 12),
+                Size = new Size(120, 30)
+            };
+            _benchmarkButton.Click += async (sender, e) => await RunBenchmark();
+            this.Controls.Add(_benchmarkButton);
+
+            // メニューストリップの初期化
+            InitializeMenu();
+
+            // サービスの初期化
             InitializeServices();
+
+            // フォームのサイズを調整
+            this.ClientSize = new Size(
+                Math.Max(_benchmarkButton.Right + 12, _hotkeyInfoLabel.Right + 12),
+                _benchmarkButton.Bottom + 12
+            );
 
             // 常に最前面に表示
             SetWindowPos(this.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
@@ -44,9 +78,7 @@ namespace GameTranslationOverlay
         {
             _menuStrip = new MenuStrip();
             var toolsMenu = new ToolStripMenuItem("Tools");
-
             var ocrTestMenuItem = new ToolStripMenuItem("OCR Test");
-            var translationTestMenuItem = new ToolStripMenuItem("Translation Test");
 
             ocrTestMenuItem.Click += (s, e) =>
             {
@@ -56,34 +88,10 @@ namespace GameTranslationOverlay
                 }
             };
 
-            translationTestMenuItem.Click += (s, e) =>
-            {
-                using (var testForm = new TranslationTestForm())
-                {
-                    testForm.ShowDialog(this);
-                }
-            };
-
             toolsMenu.DropDownItems.Add(ocrTestMenuItem);
-            toolsMenu.DropDownItems.Add(translationTestMenuItem);
             _menuStrip.Items.Add(toolsMenu);
             MainMenuStrip = _menuStrip;
             Controls.Add(_menuStrip);
-
-            // メニューの下にボタンを配置するための調整
-            _benchmarkButton.Location = new Point(12, _menuStrip.Height + 12);
-        }
-
-        private void InitializeBenchmarkButton()
-        {
-            _benchmarkButton = new Button
-            {
-                Text = "Run OCR Benchmark",
-                Location = new Point(12, 12),
-                Size = new Size(120, 30)
-            };
-            _benchmarkButton.Click += async (sender, e) => await RunBenchmark();
-            this.Controls.Add(_benchmarkButton);
         }
 
         private async void InitializeServices()
@@ -139,11 +147,9 @@ namespace GameTranslationOverlay
                     {
                         using (var image = new Bitmap(imagePath))
                         {
-                            // 画像全体を対象とするRectangleを作成
                             var region = new Rectangle(0, 0, image.Width, image.Height);
                             var results = await OcrTest.RunTests(region);
 
-                            // PaddleOCRの結果のみを表示
                             var paddleResults = results.Where(r => r.EngineName == "PaddleOCR");
                             foreach (var result in paddleResults)
                             {

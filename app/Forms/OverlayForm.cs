@@ -5,9 +5,11 @@ using System.Runtime.InteropServices;
 using System.Diagnostics;
 using System.Linq;
 using GameTranslationOverlay.Core.OCR;
+using GameTranslationOverlay.Core.Translation;
 using GameTranslationOverlay.Forms;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace GameTranslationOverlay
 {
@@ -29,10 +31,23 @@ namespace GameTranslationOverlay
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint GetWindowLong(IntPtr hWnd, int nIndex);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+        private const uint GW_HWNDNEXT = 2;
+
+
         // Win32 定数
         private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
         private const uint SWP_NOMOVE = 0x0002;
         private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_NOACTIVATE = 0x0010;
         private const int GWL_EXSTYLE = -20;
         private const uint WS_EX_LAYERED = 0x80000;
         private const uint WS_EX_TRANSPARENT = 0x20;
@@ -53,7 +68,10 @@ namespace GameTranslationOverlay
         private const int MAX_AREAS = 30;
         private const long MAX_MEMORY_USAGE = 100_000_000; // 100MB
 
+        // フィールド
         private readonly IOcrEngine _ocrEngine;
+        private readonly LibreTranslateEngine _translationEngine;
+        private readonly ILogger<OverlayForm> _logger;
         private bool _isRegionSelectMode = false;
         private Point? _selectionStart = null;
         private Panel _selectionBox = null;
@@ -61,33 +79,81 @@ namespace GameTranslationOverlay
         private readonly List<Form> _translationContainers = new List<Form>();
         private Panel _selectionOverlay = null;
         private long _totalMemoryUsage = 0;
-        private readonly Label _hotkeyInfoLabel;
+        private readonly Timer _topMostTimer;
 
         public OverlayForm(IOcrEngine ocrEngine)
         {
             InitializeComponent();
             _ocrEngine = ocrEngine ?? throw new ArgumentNullException(nameof(ocrEngine));
 
-            // ホットキー情報表示用のラベルを作成
-            _hotkeyInfoLabel = new Label
+            // ロガーの設定
+            var loggerFactory = LoggerFactory.Create(builder =>
             {
-                AutoSize = true,
-                BackColor = Color.FromArgb(200, 0, 0, 0),
-                ForeColor = Color.White,
-                Font = new Font("Yu Gothic UI", 9),
-                Padding = new Padding(10),
-                Text = "ホットキー一覧:\n" +
-                       "Ctrl+Shift+O : オーバーレイ表示切替\n" +
-                       "Ctrl+Shift+R : エリア選択・翻訳開始\n" +
-                       "Ctrl+Shift+C : すべてのエリアを削除"
-            };
+                builder
+                    .AddConsole()
+                    .SetMinimumLevel(LogLevel.Debug);
+            });
+            _logger = loggerFactory.CreateLogger<OverlayForm>();
 
-            this.Controls.Add(_hotkeyInfoLabel);
-            _hotkeyInfoLabel.Location = new Point(10, 10);
-            _hotkeyInfoLabel.BringToFront();
+            // 翻訳エンジンの初期化
+            var config = new TranslationConfig
+            {
+                BaseUrl = "http://localhost:5000",
+                TimeoutSeconds = 10
+            };
+            _translationEngine = new LibreTranslateEngine(config, _logger);
+
+            // 最前面維持用のタイマーを初期化
+            _topMostTimer = new Timer
+            {
+                Interval = 500,
+                Enabled = true
+            };
+            _topMostTimer.Tick += (s, e) => EnsureTopMostWithoutFocus();
 
             InitializeOverlayWindow();
             CreateSelectionOverlay();
+        }
+
+        private void EnsureTopMostWithoutFocus()
+        {
+            try
+            {
+                // 現在のフォアグラウンドウィンドウを保存
+                var currentForeground = GetForegroundWindow();
+
+                // オーバーレイを最前面に
+                SetWindowPos(
+                    this.Handle,
+                    HWND_TOPMOST,
+                    0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                );
+
+                // 翻訳ボックスも最前面に
+                foreach (var container in _translationContainers)
+                {
+                    if (container.Visible)
+                    {
+                        SetWindowPos(
+                            container.Handle,
+                            HWND_TOPMOST,
+                            0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                        );
+                    }
+                }
+
+                // フォアグラウンドウィンドウを元に戻す
+                if (currentForeground != IntPtr.Zero)
+                {
+                    SetForegroundWindow(currentForeground);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error in EnsureTopMostWithoutFocus: {ex.Message}");
+            }
         }
 
         private void CreateSelectionOverlay()
@@ -115,10 +181,10 @@ namespace GameTranslationOverlay
             this.BackColor = Color.Black;
             this.TransparencyKey = Color.Black;
             this.Opacity = 0.01;
-
             this.Bounds = Screen.PrimaryScreen.Bounds;
 
-            SetWindowPos(this.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+            // 常に最前面に表示
+            SetWindowPos(this.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
             // ホットキーの登録
             RegisterHotKey(this.Handle, HOTKEY_ID_OVERLAY, MOD_CONTROL | MOD_SHIFT, (int)Keys.O);
@@ -138,6 +204,8 @@ namespace GameTranslationOverlay
                 {
                     case HOTKEY_ID_OVERLAY:
                         this.Visible = !this.Visible;
+                        if (this.Visible)
+                            EnsureTopMostWithoutFocus();
                         Debug.WriteLine($"オーバーレイ表示切り替え: {this.Visible}");
                         break;
 
@@ -194,6 +262,7 @@ namespace GameTranslationOverlay
                 _selectionOverlay.Visible = true;
                 _selectionOverlay.Cursor = Cursors.Cross;
                 _selectionOverlay.BringToFront();
+                EnsureTopMostWithoutFocus();
             }
             else
             {
@@ -271,16 +340,22 @@ namespace GameTranslationOverlay
             Debug.WriteLine($"Processing region: {region}");
             try
             {
+                // OCR実行
                 var results = await OcrTest.RunTests(region);
                 if (!results.Any()) return;
 
                 var detailedResult = results.FirstOrDefault(r => r.Configuration.Contains("Detailed"));
                 var bestResult = detailedResult ?? results.OrderByDescending(r => r.Accuracy).First();
-                var resultText = bestResult.RecognizedText.Trim();
+                var recognizedText = bestResult.RecognizedText.Trim();
 
-                var text = $"Recognized Text:\n{resultText}";
+                // 翻訳実行
+                await _translationEngine.InitializeAsync();
+                string translatedText = await _translationEngine.TranslateAsync(recognizedText, "en", "ja");
 
-                var translationBox = new TranslationBox(region, text);
+                // 表示テキストの作成
+                var displayText = $"Original Text:\n{recognizedText}\n\nTranslated Text:\n{translatedText}";
+
+                var translationBox = new TranslationBox(region, displayText);
                 translationBox.TextChanged += async (s, e) => await HandleTextChanged(e.Region);
                 _translationBoxes.Add(translationBox);
 
@@ -303,13 +378,21 @@ namespace GameTranslationOverlay
                 container.Show();
                 _translationContainers.Add(container);
 
-                // メモリ使用量の更新
-                _totalMemoryUsage += region.Width * region.Height * 4; // 4 bytes per pixel (RGBA)
+                // 最前面に表示
+                SetWindowPos(
+                    container.Handle,
+                    HWND_TOPMOST,
+                    0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                );
+
+                _totalMemoryUsage += region.Width * region.Height * 4;
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error processing region: {ex.Message}");
                 Debug.WriteLine(ex.StackTrace);
+                MessageBox.Show($"エラーが発生しました: {ex.Message}", "エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -322,18 +405,22 @@ namespace GameTranslationOverlay
 
                 var detailedResult = results.FirstOrDefault(r => r.Configuration.Contains("Detailed"));
                 var bestResult = detailedResult ?? results.OrderByDescending(r => r.Accuracy).First();
-                var resultText = bestResult.RecognizedText.Trim();
+                var recognizedText = bestResult.RecognizedText.Trim();
+
+                // 翻訳の実行
+                string translatedText = await _translationEngine.TranslateAsync(recognizedText, "en", "ja");
 
                 var box = _translationBoxes.FirstOrDefault(b => b.TargetRegion == region);
                 if (box != null)
                 {
-                    var text = $"Recognized Text:\n{resultText}";
-                    box.UpdateText(text);
+                    var displayText = $"Original Text:\n{recognizedText}\n\nTranslated Text:\n{translatedText}";
+                    box.UpdateText(displayText);
                 }
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error handling text change: {ex.Message}");
+                _logger.LogError($"Text change handling error: {ex.Message}", ex);
             }
         }
 
@@ -357,8 +444,24 @@ namespace GameTranslationOverlay
             }
         }
 
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            base.OnVisibleChanged(e);
+            if (this.Visible)
+            {
+                EnsureTopMostWithoutFocus();
+                _topMostTimer.Start();
+            }
+            else
+            {
+                _topMostTimer.Stop();
+            }
+        }
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            _topMostTimer.Stop();
+            _topMostTimer.Dispose();
             UnregisterHotKey(this.Handle, HOTKEY_ID_OVERLAY);
             UnregisterHotKey(this.Handle, HOTKEY_ID_REGION_SELECT);
             UnregisterHotKey(this.Handle, HOTKEY_ID_CLEAR);
