@@ -6,10 +6,14 @@ using System.Diagnostics;
 using System.Linq;
 using GameTranslationOverlay.Core.OCR;
 using GameTranslationOverlay.Core.Translation;
+using GameTranslationOverlay.Core.Translation.Services;
+using GameTranslationOverlay.Core.Translation.Interfaces;
+using GameTranslationOverlay.Core.Translation.Models;
 using GameTranslationOverlay.Forms;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using GameTranslationOverlay.Core.Translation.Configuration;
 
 namespace GameTranslationOverlay
 {
@@ -80,11 +84,14 @@ namespace GameTranslationOverlay
         private Panel _selectionOverlay = null;
         private long _totalMemoryUsage = 0;
         private readonly Timer _topMostTimer;
+        private readonly ITranslationCache _translationCache;
 
         public OverlayForm(IOcrEngine ocrEngine)
         {
             InitializeComponent();
             _ocrEngine = ocrEngine ?? throw new ArgumentNullException(nameof(ocrEngine));
+
+            _translationCache = new TranslationCache(new TranslationConfig());
 
             // ロガーの設定
             var loggerFactory = LoggerFactory.Create(builder =>
@@ -99,11 +106,11 @@ namespace GameTranslationOverlay
             var settings = new LibreTranslateEngine.Settings
             {
                 BaseUrl = "http://localhost:5000",
-                Timeout = 10000,  // 10秒（ミリ秒単位）
+                Timeout = 10000,
                 MaxRetries = 3,
                 RetryDelay = 1000
             };
-            _translationEngine = new LibreTranslateEngine(settings);
+            _translationEngine = new LibreTranslateEngine(settings, _translationCache);
 
             // 最前面維持用のタイマーを初期化
             _topMostTimer = new Timer

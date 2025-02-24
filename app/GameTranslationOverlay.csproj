@@ -73,6 +73,7 @@
     <Compile Include="Core\Translation\Interfaces\ITranslationEngine.cs" />
     <Compile Include="Core\Translation\ITranslationEngine.cs" />
     <Compile Include="Core\Translation\Models\TranslationModels.cs" />
+    <Compile Include="Core\Translation\Services\LibreTranslateEngine.cs" />
     <Compile Include="Core\Translation\Services\TranslationCache.cs" />
     <Compile Include="Core\Utils\TextDetectionUtil.cs" />
     <Compile Include="Forms\MainForm.cs">
