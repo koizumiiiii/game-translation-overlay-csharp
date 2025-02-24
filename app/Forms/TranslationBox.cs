@@ -1,293 +1,220 @@
 ﻿using System;
 using System.Drawing;
 using System.Windows.Forms;
-using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using System.Diagnostics;
-using System.IO;
-using System.Drawing.Imaging;
 using GameTranslationOverlay.Core.Utils;
 
 namespace GameTranslationOverlay.Forms
 {
-    public class TranslationBox : Panel, IDisposable
+    public class TranslationBox : RichTextBox
     {
-        [DllImport("user32.dll")]
-        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+        private const int MONITORING_INTERVAL = 500; // ミリ秒
+        private const int MIN_INTERVAL_BETWEEN_CHANGES = 1000; // ミリ秒
+        private const int MAX_CONSECUTIVE_ERRORS = 3;
 
-        private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
-        private const uint SWP_NOMOVE = 0x0002;
-        private const uint SWP_NOSIZE = 0x0001;
+        private readonly Rectangle _targetRegion;
+        private Timer _monitoringTimer;
+        private Bitmap _lastImage;
+        private string _lastText;
+        private bool _isMonitoring;
+        private DateTime _lastChangeTime;
+        private int _consecutiveErrors;
+        private bool _isDisposed;
 
-        private readonly Label _textLabel;
-        private readonly Panel _highlightBox;  // 選択領域の可視化用
-        private const int PADDING = 10;
-        private const int MAX_WIDTH = 400;
-        private readonly Timer _monitorTimer;
-        private Bitmap _lastScreenshot;
-        private string _lastRecognizedText;
-        private readonly Rectangle _targetBounds;
-        private bool _isMonitoring = false;
-        private int _errorCount = 0;
-        private const int MAX_ERROR_COUNT = 5;
-        private DateTime _lastOcrTime = DateTime.MinValue;
-        private const int MIN_OCR_INTERVAL_MS = 2000;
+        public event EventHandler<TextChangeEventArgs> TextChangeDetected;
 
-        public new event EventHandler<TextChangedEventArgs> TextChanged;
-        public Rectangle TargetRegion => _targetBounds;
-        public bool IsActive => _isMonitoring && !IsDisposed;
-
-        public TranslationBox(Rectangle targetBounds, string text)
+        public TranslationBox(Rectangle region) : base()
         {
-            _targetBounds = targetBounds;
-
-            // パネルの基本設定
-            this.BackColor = Color.FromArgb(200, 0, 0, 0);
-            this.Padding = new Padding(PADDING);
-            this.BorderStyle = BorderStyle.None;
-
-            // 選択領域のハイライトを作成
-            _highlightBox = new Panel
-            {
-                BackColor = Color.FromArgb(30, 0, 120, 215),
-                BorderStyle = BorderStyle.FixedSingle,
-                Bounds = targetBounds
-            };
-
-            // テキストラベルの作成
-            _textLabel = new Label
-            {
-                Text = text,
-                ForeColor = Color.White,
-                BackColor = Color.Transparent,
-                Font = new Font("Yu Gothic UI", 9),
-                AutoSize = true,
-                MaximumSize = new Size(MAX_WIDTH - (PADDING * 2), 0),
-                MinimumSize = new Size(100, 0)
-            };
-
-            // パネルにラベルを追加
-            this.Controls.Add(_textLabel);
-            _textLabel.Location = new Point(PADDING, PADDING);
-
-            // パネルのサイズをラベルに合わせて設定
-            this.Size = new Size(
-                Math.Min(_textLabel.Width + (PADDING * 2), MAX_WIDTH),
-                _textLabel.Height + (PADDING * 2)
-            );
-
-            // 位置を設定（選択領域の下に表示）
-            this.Location = new Point(
-                targetBounds.X,
-                targetBounds.Y + targetBounds.Height + 5
-            );
-
-            // 監視タイマーの設定
-            _monitorTimer = new Timer
-            {
-                Interval = 1000 // 初期間隔は1秒
-            };
-            _monitorTimer.Tick += MonitorTimer_Tick;
-            _lastRecognizedText = text;
-
-            // 作成時に自動的に監視を開始
-            StartMonitoring();
-
-            Debug.WriteLine($"TranslationBox created: Location={this.Location}, Size={this.Size}");
+            _targetRegion = region;
+            InitializeBox();
+            InitializeMonitoring();
         }
 
-        public void StartMonitoring()
+        private void InitializeBox()
         {
-            if (!_isMonitoring)
-            {
-                _lastScreenshot = CaptureRegion();
-                if (_lastScreenshot != null)
-                {
-                    _monitorTimer.Start();
-                    _isMonitoring = true;
-                    _errorCount = 0;
-                    Debug.WriteLine("Monitoring started");
-                }
-                else
-                {
-                    Debug.WriteLine("Failed to start monitoring - initial capture failed");
-                }
-            }
+            SetStyle(ControlStyles.SupportsTransparentBackColor, true);
+
+            BackColor = Color.FromArgb(128, 0, 0, 0);
+            ForeColor = Color.White;
+            Font = new Font("Yu Gothic UI", 9F);
+            BorderStyle = BorderStyle.None;
+            Location = new Point(_targetRegion.Right + 10, _targetRegion.Bottom);
+            Size = new Size(220, 95);
+            ReadOnly = true;
+            Multiline = true;
+            WordWrap = true;
+            DetectUrls = false;
+
+            Debug.WriteLine($"TranslationBox created: Location={Location}, Size={Size}");
         }
 
-        public void StopMonitoring()
+        private void InitializeMonitoring()
         {
-            if (_isMonitoring)
-            {
-                _monitorTimer.Stop();
-                _isMonitoring = false;
-                _lastScreenshot?.Dispose();
-                _lastScreenshot = null;
-                _errorCount = 0;
-                Debug.WriteLine("Monitoring stopped");
-            }
-        }
+            _lastChangeTime = DateTime.Now;
+            _consecutiveErrors = 0;
 
-        private void MonitorTimer_Tick(object sender, EventArgs e)
-        {
-            if (!_isMonitoring || !IsHandleCreated || IsDisposed)
-            {
-                return;
-            }
+            _monitoringTimer = new Timer();
+            _monitoringTimer.Interval = MONITORING_INTERVAL;
+            _monitoringTimer.Tick += OnMonitoringTick;
+            _monitoringTimer.Enabled = false;
 
             try
             {
-                var currentScreenshot = CaptureRegion();
-                if (currentScreenshot == null)
-                {
-                    HandleError("Capture failed");
+                _lastImage = CaptureRegion();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to capture initial region: {ex.Message}");
+            }
+        }
+
+        public Rectangle TargetRegion => _targetRegion;
+
+        private async void OnMonitoringTick(object sender, EventArgs e)
+        {
+            await Task.Run(async () => await CheckForChanges());
+        }
+
+        private async Task CheckForChanges()
+        {
+            if (!_isMonitoring || _isDisposed) return;
+
+            try
+            {
+                if ((DateTime.Now - _lastChangeTime).TotalMilliseconds < MIN_INTERVAL_BETWEEN_CHANGES)
                     return;
-                }
 
-                using (currentScreenshot)
+                using (var currentImage = CaptureRegion())
                 {
-                    var hasChange = TextDetectionUtil.HasSignificantChange(
-                        _lastScreenshot,
-                        currentScreenshot,
-                        _lastRecognizedText,
-                        _lastRecognizedText
-                    );
+                    if (currentImage == null) return;
 
-                    if (hasChange)
+                    await Task.Run(() =>
                     {
-                        Debug.WriteLine("Text change detected");
-                        _lastScreenshot?.Dispose();
-                        _lastScreenshot = (Bitmap)currentScreenshot.Clone();
-
-                        if ((DateTime.Now - _lastOcrTime).TotalMilliseconds >= MIN_OCR_INTERVAL_MS)
+                        if (TextDetectionUtil.HasSignificantChange(_lastImage, currentImage, _lastText, Text))
                         {
-                            TextChanged?.Invoke(this, new TextChangedEventArgs(_targetBounds));
-                            _lastOcrTime = DateTime.Now;
+                            _lastChangeTime = DateTime.Now;
+                            var oldImage = _lastImage;
+                            _lastImage = (Bitmap)currentImage.Clone();
+                            oldImage?.Dispose();
+
+                            BeginInvoke(new Action(() => OnPossibleTextChange()));
+                            _consecutiveErrors = 0;
+                            Debug.WriteLine($"Text change detected in region: {_targetRegion}");
                         }
-                    }
+                    });
                 }
             }
             catch (Exception ex)
             {
-                HandleError($"MonitorTimer_Tick error: {ex.Message}");
-                if (ex is AccessViolationException)
+                Debug.WriteLine($"Error in CheckForChanges: {ex.Message}");
+                _consecutiveErrors++;
+
+                if (_consecutiveErrors >= MAX_CONSECUTIVE_ERRORS)
                 {
-                    Debug.WriteLine("Access violation detected - stopping monitoring");
                     StopMonitoring();
+                    Debug.WriteLine("Monitoring stopped due to consecutive errors");
                 }
-            }
-        }
-
-        private void HandleError(string message)
-        {
-            Debug.WriteLine(message);
-            _errorCount++;
-
-            if (_errorCount >= MAX_ERROR_COUNT)
-            {
-                Debug.WriteLine($"Too many errors ({_errorCount}), stopping monitoring");
-                StopMonitoring();
-            }
-            else
-            {
-                // エラー発生時は監視間隔を一時的に延長
-                _monitorTimer.Interval = 2000;
             }
         }
 
         private Bitmap CaptureRegion()
         {
+            if (_isDisposed) return null;
+
             try
             {
-                if (_targetBounds.Width <= 0 || _targetBounds.Height <= 0)
-                {
-                    Debug.WriteLine("Invalid region dimensions");
-                    return null;
-                }
-
-                var screenBounds = Screen.PrimaryScreen.Bounds;
-                if (!screenBounds.Contains(_targetBounds))
-                {
-                    Debug.WriteLine("Region is outside screen bounds");
-                    return null;
-                }
-
-                var bitmap = new Bitmap(_targetBounds.Width, _targetBounds.Height);
+                var bitmap = new Bitmap(_targetRegion.Width, _targetRegion.Height);
                 using (var g = Graphics.FromImage(bitmap))
                 {
-                    g.CopyFromScreen(_targetBounds.Location, Point.Empty, _targetBounds.Size);
+                    g.CopyFromScreen(_targetRegion.Location, Point.Empty, _targetRegion.Size);
                 }
                 return bitmap;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Screen capture error: {ex.Message}");
+                Debug.WriteLine($"Error capturing region: {ex.Message}");
                 return null;
             }
         }
 
+        private void OnPossibleTextChange()
+        {
+            if (_isDisposed) return;
+
+            try
+            {
+                TextChangeDetected?.Invoke(this, new TextChangeEventArgs(_targetRegion));
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error in OnPossibleTextChange: {ex.Message}");
+            }
+        }
+
+        public void StartMonitoring()
+        {
+            if (_isDisposed) return;
+
+            _isMonitoring = true;
+            _monitoringTimer.Start();
+            Debug.WriteLine("Monitoring started");
+        }
+
+        public void StopMonitoring()
+        {
+            if (_isDisposed) return;
+
+            _isMonitoring = false;
+            _monitoringTimer.Stop();
+            Debug.WriteLine("Monitoring stopped");
+        }
+
         public void UpdateText(string newText)
         {
-            if (this.InvokeRequired)
-            {
-                this.Invoke(new Action(() => UpdateText(newText)));
-                return;
-            }
+            if (_isDisposed) return;
 
-            _lastRecognizedText = newText;
-            _textLabel.Text = newText;
-            this.Size = new Size(
-                Math.Min(_textLabel.Width + (PADDING * 2), MAX_WIDTH),
-                _textLabel.Height + (PADDING * 2)
-            );
+            if (_lastText != newText)
+            {
+                if (InvokeRequired)
+                {
+                    BeginInvoke(new Action(() => UpdateText(newText)));
+                    return;
+                }
+
+                Text = newText;
+                _lastText = newText;
+                Debug.WriteLine($"Text updated: {newText}");
+            }
         }
 
         public void RemoveHighlight()
         {
-            if (_highlightBox != null && !_highlightBox.IsDisposed)
-            {
-                _highlightBox.Dispose();
-            }
-        }
-
-        protected override void OnHandleCreated(EventArgs e)
-        {
-            base.OnHandleCreated(e);
-            SetWindowPos(this.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
-            _highlightBox?.BringToFront();
-        }
-
-        protected override void OnVisibleChanged(EventArgs e)
-        {
-            base.OnVisibleChanged(e);
-            if (_highlightBox != null)
-            {
-                _highlightBox.Visible = this.Visible;
-            }
-            if (!Visible && _isMonitoring)
-            {
-                StopMonitoring();
-            }
+            if (_isDisposed) return;
+            StopMonitoring();
         }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
+            if (!_isDisposed)
             {
-                StopMonitoring();
-                _monitorTimer?.Dispose();
-                _textLabel?.Dispose();
-                _highlightBox?.Dispose();
-                _lastScreenshot?.Dispose();
+                if (disposing)
+                {
+                    StopMonitoring();
+                    _monitoringTimer?.Dispose();
+                    _lastImage?.Dispose();
+                }
+                _isDisposed = true;
             }
             base.Dispose(disposing);
         }
     }
 
-    public class TextChangedEventArgs : EventArgs
+    public class TextChangeEventArgs : EventArgs
     {
         public Rectangle Region { get; }
 
-        public TextChangedEventArgs(Rectangle region)
+        public TextChangeEventArgs(Rectangle region)
         {
             Region = region;
         }

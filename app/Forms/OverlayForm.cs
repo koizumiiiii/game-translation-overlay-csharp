@@ -96,12 +96,14 @@ namespace GameTranslationOverlay
             _logger = loggerFactory.CreateLogger<OverlayForm>();
 
             // 翻訳エンジンの初期化
-            var config = new TranslationConfig
+            var settings = new LibreTranslateEngine.Settings
             {
                 BaseUrl = "http://localhost:5000",
-                TimeoutSeconds = 10
+                Timeout = 10000,  // 10秒（ミリ秒単位）
+                MaxRetries = 3,
+                RetryDelay = 1000
             };
-            _translationEngine = new LibreTranslateEngine(config, _logger);
+            _translationEngine = new LibreTranslateEngine(settings);
 
             // 最前面維持用のタイマーを初期化
             _topMostTimer = new Timer
@@ -355,8 +357,9 @@ namespace GameTranslationOverlay
                 // 表示テキストの作成
                 var displayText = $"Original Text:\n{recognizedText}\n\nTranslated Text:\n{translatedText}";
 
-                var translationBox = new TranslationBox(region, displayText);
-                translationBox.TextChanged += async (s, e) => await HandleTextChanged(e.Region);
+                var translationBox = new TranslationBox(region);
+                translationBox.UpdateText(displayText);
+                translationBox.TextChangeDetected += async (s, e) => await HandleTextChanged(e.Region);
                 _translationBoxes.Add(translationBox);
 
                 var container = new Form

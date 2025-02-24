@@ -68,9 +68,10 @@
     <Compile Include="Core\OCR\OcrTest.cs" />
     <Compile Include="Core\OCR\PaddleOcrEngine.cs" />
     <Compile Include="Core\OCR\Utils\WindowsRuntimeExtensions.cs" />
+    <Compile Include="Core\Translation\Configuration\TranslationConfig.cs" />
+    <Compile Include="Core\Translation\Exceptions\TranslationException.cs" />
     <Compile Include="Core\Translation\ITranslationEngine.cs" />
     <Compile Include="Core\Translation\LibreTranslateEngine.cs" />
-    <Compile Include="Core\Translation\Tests\LibreTranslateEngineTest.cs" />
     <Compile Include="Core\Utils\TextDetectionUtil.cs" />
     <Compile Include="Forms\MainForm.cs">
       <SubType>Form</SubType>
@@ -93,12 +94,6 @@
     </Compile>
     <Compile Include="Forms\TranslationBox.cs">
       <SubType>Component</SubType>
-    </Compile>
-    <Compile Include="Forms\TranslationTestForm.cs">
-      <SubType>Form</SubType>
-    </Compile>
-    <Compile Include="Forms\TranslationTestForm.Designer.cs">
-      <DependentUpon>TranslationTestForm.cs</DependentUpon>
     </Compile>
     <Compile Include="Utils\HotkeyManager.cs" />
     <Compile Include="Program.cs" />
