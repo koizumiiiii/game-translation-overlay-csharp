@@ -23,6 +23,7 @@ namespace GameTranslationOverlay.Core.Translation.Services
         private bool _isInitialized;
         private bool _disposed;
         private ISet<string> _supportedLanguages;
+        private List<LanguageInfo> _languageInfos;
 
         public bool IsAvailable => _isInitialized && !_disposed;
 
@@ -54,6 +55,7 @@ namespace GameTranslationOverlay.Core.Translation.Services
             };
 
             _supportedLanguages = new HashSet<string>();
+            _languageInfos = new List<LanguageInfo>();
             Debug.WriteLine($"LibreTranslateEngine initialized with base URL: {_baseUrl}");
         }
 
@@ -224,9 +226,9 @@ namespace GameTranslationOverlay.Core.Translation.Services
                 var content = await response.Content.ReadAsStringAsync();
                 Debug.WriteLine($"Supported languages response: {content}");
 
-                var languages = JsonSerializer.Deserialize<List<LanguageInfo>>(content, _jsonOptions);
+                _languageInfos = JsonSerializer.Deserialize<List<LanguageInfo>>(content, _jsonOptions);
                 _supportedLanguages = new HashSet<string>(
-                    languages.Select(l => l.Code),
+                    _languageInfos.Select(l => l.Code),
                     StringComparer.OrdinalIgnoreCase
                 );
 
@@ -248,20 +250,15 @@ namespace GameTranslationOverlay.Core.Translation.Services
                 throw new UnsupportedLanguageException(toLang);
         }
 
-        public async Task<IEnumerable<LanguageInfo>> GetSupportedLanguagesAsync()
+        public Task<IEnumerable<LanguageInfo>> GetSupportedLanguagesAsync()
         {
-            try
-            {
-                var response = await _httpClient.GetAsync($"{_baseUrl}/languages");
-                response.EnsureSuccessStatusCode();
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(LibreTranslateEngine));
 
-                var content = await response.Content.ReadAsStringAsync();
-                return JsonSerializer.Deserialize<List<LanguageInfo>>(content, _jsonOptions);
-            }
-            catch (Exception ex)
-            {
-                throw new TranslationServerException("Failed to get supported languages.", ex);
-            }
+            if (!_isInitialized)
+                throw new InvalidOperationException("Translation engine is not initialized.");
+
+            return Task.FromResult<IEnumerable<LanguageInfo>>(_languageInfos);
         }
 
         public void Dispose()

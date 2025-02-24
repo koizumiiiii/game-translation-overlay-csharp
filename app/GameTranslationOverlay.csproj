@@ -71,7 +71,6 @@
     <Compile Include="Core\Translation\Configuration\TranslationConfig.cs" />
     <Compile Include="Core\Translation\Exceptions\TranslationException.cs" />
     <Compile Include="Core\Translation\Interfaces\ITranslationEngine.cs" />
-    <Compile Include="Core\Translation\ITranslationEngine.cs" />
     <Compile Include="Core\Translation\Models\TranslationModels.cs" />
     <Compile Include="Core\Translation\Services\LibreTranslateEngine.cs" />
     <Compile Include="Core\Translation\Services\TranslationCache.cs" />

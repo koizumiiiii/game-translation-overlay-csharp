@@ -46,7 +46,6 @@ namespace GameTranslationOverlay
 
         private const uint GW_HWNDNEXT = 2;
 
-
         // Win32 定数
         private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
         private const uint SWP_NOMOVE = 0x0002;
@@ -74,7 +73,7 @@ namespace GameTranslationOverlay
 
         // フィールド
         private readonly IOcrEngine _ocrEngine;
-        private readonly LibreTranslateEngine _translationEngine;
+        private readonly ITranslationEngine _translationEngine;
         private readonly ILogger<OverlayForm> _logger;
         private bool _isRegionSelectMode = false;
         private Point? _selectionStart = null;
@@ -122,6 +121,21 @@ namespace GameTranslationOverlay
 
             InitializeOverlayWindow();
             CreateSelectionOverlay();
+            _ = InitializeTranslationEngineAsync();
+        }
+
+        private async Task InitializeTranslationEngineAsync()
+        {
+            try
+            {
+                await _translationEngine.InitializeAsync();
+                Debug.WriteLine("Translation engine initialized successfully");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Translation engine initialization failed: {ex.Message}");
+                _logger.LogError(ex, "Failed to initialize translation engine");
+            }
         }
 
         private void EnsureTopMostWithoutFocus()
@@ -358,7 +372,16 @@ namespace GameTranslationOverlay
                 var recognizedText = bestResult.RecognizedText.Trim();
 
                 // 翻訳実行
-                await _translationEngine.InitializeAsync();
+                if (!_translationEngine.IsAvailable)
+                {
+                    await _translationEngine.InitializeAsync();
+                    if (!_translationEngine.IsAvailable)
+                    {
+                        MessageBox.Show("翻訳サービスが利用できません。接続を確認してください。", "エラー", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                }
+
                 string translatedText = await _translationEngine.TranslateAsync(recognizedText, "en", "ja");
 
                 // 表示テキストの作成
@@ -410,6 +433,12 @@ namespace GameTranslationOverlay
         {
             try
             {
+                if (!_translationEngine.IsAvailable)
+                {
+                    Debug.WriteLine("Translation service is not available");
+                    return;
+                }
+
                 var results = await OcrTest.RunTests(region);
                 if (!results.Any()) return;
 
