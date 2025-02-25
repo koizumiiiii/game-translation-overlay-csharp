@@ -35,16 +35,30 @@ namespace GameTranslationOverlay.Forms
         {
             SetStyle(ControlStyles.SupportsTransparentBackColor, true);
 
-            BackColor = Color.FromArgb(128, 0, 0, 0);
-            ForeColor = Color.White;
-            Font = new Font("Yu Gothic UI", 9F);
+            // 背景をより暗く、透明度を調整
+            BackColor = Color.FromArgb(220, 10, 10, 10); // より暗い背景
+            ForeColor = Color.White; // 白いテキスト
+
+            // フォントを大きくして可読性を向上
+            Font = new Font("Yu Gothic UI", 12F, FontStyle.Regular);
+
             BorderStyle = BorderStyle.None;
-            Location = new Point(_targetRegion.Right + 10, _targetRegion.Bottom);
-            Size = new Size(220, 95);
+
+            // ウィンドウサイズを大きくする
+            // 位置はコンテナで決定されるので、右側に表示
+            Location = new Point(_targetRegion.Right + 20, _targetRegion.Top);
+            Size = new Size(350, 200); // より大きなサイズ
+
             ReadOnly = true;
             Multiline = true;
             WordWrap = true;
             DetectUrls = false;
+
+            // スクロールバーの表示設定
+            ScrollBars = RichTextBoxScrollBars.Vertical;
+
+            // 内部の余白を大きくする
+            Margin = new Padding(20);
 
             Debug.WriteLine($"TranslationBox created: Location={Location}, Size={Size}");
         }
@@ -182,7 +196,19 @@ namespace GameTranslationOverlay.Forms
                     return;
                 }
 
-                Text = newText;
+                Clear(); // 既存のテキストをクリア
+
+                // 書式設定を適用
+                SelectionFont = new Font(Font.FontFamily, Font.Size, FontStyle.Bold);
+                SelectionColor = Color.White;
+
+                // テキストの追加 (20ピクセルの余白を維持)
+                SelectionIndent = 20;
+                SelectionRightIndent = 20;
+                SelectionHangingIndent = 0;
+
+                AppendText(newText);
+
                 _lastText = newText;
                 Debug.WriteLine($"Text updated: {newText}");
             }

@@ -209,10 +209,13 @@ namespace GameTranslationOverlay
             // 常に最前面に表示
             SetWindowPos(this.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
-            // ホットキーの登録
+            // ホットキーの登録 - 正しい仮想キーコードを使用
             RegisterHotKey(this.Handle, HOTKEY_ID_OVERLAY, MOD_CONTROL | MOD_SHIFT, (int)Keys.O);
             RegisterHotKey(this.Handle, HOTKEY_ID_REGION_SELECT, MOD_CONTROL | MOD_SHIFT, (int)Keys.R);
             RegisterHotKey(this.Handle, HOTKEY_ID_CLEAR, MOD_CONTROL | MOD_SHIFT, (int)Keys.C);
+
+            // 登録確認のデバッグ出力
+            Debug.WriteLine("ホットキーを登録しました: Ctrl+Shift+O, Ctrl+Shift+R, Ctrl+Shift+C");
 
             SetClickThrough(true);
         }
@@ -223,6 +226,8 @@ namespace GameTranslationOverlay
 
             if (m.Msg == WM_HOTKEY)
             {
+                Debug.WriteLine($"ホットキーが押されました: ID={m.WParam.ToInt32()}");
+
                 switch (m.WParam.ToInt32())
                 {
                     case HOTKEY_ID_OVERLAY:
@@ -384,24 +389,23 @@ namespace GameTranslationOverlay
 
                 string translatedText = await _translationEngine.TranslateAsync(recognizedText, "en", "ja");
 
-                // 表示テキストの作成
-                var displayText = $"Original Text:\n{recognizedText}\n\nTranslated Text:\n{translatedText}";
-
+                // リサイズ可能な翻訳ウィンドウを作成
                 var translationBox = new TranslationBox(region);
-                translationBox.UpdateText(displayText);
+                translationBox.UpdateText(translatedText);
                 translationBox.TextChangeDetected += async (s, e) => await HandleTextChanged(e.Region);
                 _translationBoxes.Add(translationBox);
 
-                var container = new Form
+                // リサイズ可能なコンテナの作成
+                var container = new ResizableTranslationContainer
                 {
-                    FormBorderStyle = FormBorderStyle.None,
                     ShowInTaskbar = false,
                     TopMost = true,
                     StartPosition = FormStartPosition.Manual,
                     Location = translationBox.Location,
                     Size = translationBox.Size,
-                    Opacity = 0.8,
-                    BackColor = Color.Black
+                    MinimumSize = new Size(100, 50), // 最小サイズを設定
+                    Opacity = 0.9,
+                    BackColor = Color.FromArgb(30, 30, 30)
                 };
 
                 container.Controls.Add(translationBox);
@@ -452,8 +456,8 @@ namespace GameTranslationOverlay
                 var box = _translationBoxes.FirstOrDefault(b => b.TargetRegion == region);
                 if (box != null)
                 {
-                    var displayText = $"Original Text:\n{recognizedText}\n\nTranslated Text:\n{translatedText}";
-                    box.UpdateText(displayText);
+                    // 翻訳結果のみを表示
+                    box.UpdateText(translatedText);
                 }
             }
             catch (Exception ex)
@@ -509,5 +513,224 @@ namespace GameTranslationOverlay
 
             base.OnFormClosing(e);
         }
+    }
+
+    public class ResizableTranslationContainer : Form
+    {
+        private const int RESIZE_BORDER_WIDTH = 8;
+        private bool _isResizing = false;
+        private Point _resizeStartPoint;
+        private Size _originalSize;
+        private ResizeDirection _currentResizeDirection = ResizeDirection.None;
+
+        private enum ResizeDirection
+        {
+            None,
+            Top,
+            TopRight,
+            Right,
+            BottomRight,
+            Bottom,
+            BottomLeft,
+            Left,
+            TopLeft
+        }
+
+        public ResizableTranslationContainer()
+        {
+            this.FormBorderStyle = FormBorderStyle.None;
+            this.SetStyle(ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+            this.DoubleBuffered = true;
+
+            // 追加: フォームをクリック可能にする
+            this.Enabled = true;
+            this.TabStop = true;
+
+            // イベントハンドラの設定方法を変更
+            this.MouseDown += ResizableTranslationContainer_MouseDown;
+            this.MouseMove += ResizableTranslationContainer_MouseMove;
+            this.MouseUp += ResizableTranslationContainer_MouseUp;
+            this.FormClosing += ResizableTranslationContainer_FormClosing;
+        }
+
+        // 明示的なイベントハンドラとして実装
+        private void ResizableTranslationContainer_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                ResizeDirection direction = GetResizeDirection(e.Location);
+                Debug.WriteLine($"MouseDown: Direction={direction}, Location={e.Location}");
+
+                if (direction == ResizeDirection.None)
+                {
+                    // 中央部分のドラッグ
+                    NativeMethods.ReleaseCapture();
+                    NativeMethods.SendMessage(this.Handle, 0xA1, 0x2, 0);
+                }
+                else
+                {
+                    // リサイズ操作の開始
+                    _isResizing = true;
+                    _resizeStartPoint = e.Location;
+                    _originalSize = this.Size;
+                    _currentResizeDirection = direction;
+                }
+            }
+        }
+
+        private void ResizableTranslationContainer_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_isResizing)
+            {
+                // リサイズ計算
+                ResizeForm(e.Location);
+            }
+            else
+            {
+                // カーソルの更新
+                UpdateCursor(GetResizeDirection(e.Location));
+            }
+        }
+
+        private void ResizableTranslationContainer_MouseUp(object sender, MouseEventArgs e)
+        {
+            _isResizing = false;
+            _currentResizeDirection = ResizeDirection.None;
+            Cursor = Cursors.Default;
+        }
+
+        private void ResizableTranslationContainer_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            foreach (Control control in this.Controls)
+            {
+                control.Dispose();
+            }
+        }
+
+        private ResizeDirection GetResizeDirection(Point mouseLocation)
+        {
+            // 縁からの距離に基づいてリサイズ方向を決定する
+            bool onLeftBorder = mouseLocation.X <= RESIZE_BORDER_WIDTH;
+            bool onRightBorder = mouseLocation.X >= this.Width - RESIZE_BORDER_WIDTH;
+            bool onTopBorder = mouseLocation.Y <= RESIZE_BORDER_WIDTH;
+            bool onBottomBorder = mouseLocation.Y >= this.Height - RESIZE_BORDER_WIDTH;
+
+            if (onTopBorder && onLeftBorder) return ResizeDirection.TopLeft;
+            if (onTopBorder && onRightBorder) return ResizeDirection.TopRight;
+            if (onBottomBorder && onLeftBorder) return ResizeDirection.BottomLeft;
+            if (onBottomBorder && onRightBorder) return ResizeDirection.BottomRight;
+            if (onTopBorder) return ResizeDirection.Top;
+            if (onRightBorder) return ResizeDirection.Right;
+            if (onBottomBorder) return ResizeDirection.Bottom;
+            if (onLeftBorder) return ResizeDirection.Left;
+
+            return ResizeDirection.None;
+        }
+
+        private void UpdateCursor(ResizeDirection direction)
+        {
+            switch (direction)
+            {
+                case ResizeDirection.Top:
+                case ResizeDirection.Bottom:
+                    Cursor = Cursors.SizeNS;
+                    break;
+                case ResizeDirection.Left:
+                case ResizeDirection.Right:
+                    Cursor = Cursors.SizeWE;
+                    break;
+                case ResizeDirection.TopLeft:
+                case ResizeDirection.BottomRight:
+                    Cursor = Cursors.SizeNWSE;
+                    break;
+                case ResizeDirection.TopRight:
+                case ResizeDirection.BottomLeft:
+                    Cursor = Cursors.SizeNESW;
+                    break;
+                default:
+                    Cursor = Cursors.Default;
+                    break;
+            }
+        }
+
+        private void ResizeForm(Point currentMouseLocation)
+        {
+            // マウスの移動量を計算
+            int deltaX = currentMouseLocation.X - _resizeStartPoint.X;
+            int deltaY = currentMouseLocation.Y - _resizeStartPoint.Y;
+
+            // 新しいサイズと位置を計算
+            int newX = this.Left;
+            int newY = this.Top;
+            int newWidth = _originalSize.Width;
+            int newHeight = _originalSize.Height;
+
+            // リサイズ方向に基づいて適切に調整
+            switch (_currentResizeDirection)
+            {
+                case ResizeDirection.Top:
+                    newY = this.Top + deltaY;
+                    newHeight = _originalSize.Height - deltaY;
+                    break;
+                case ResizeDirection.TopRight:
+                    newY = this.Top + deltaY;
+                    newHeight = _originalSize.Height - deltaY;
+                    newWidth = _originalSize.Width + deltaX;
+                    break;
+                case ResizeDirection.Right:
+                    newWidth = _originalSize.Width + deltaX;
+                    break;
+                case ResizeDirection.BottomRight:
+                    newWidth = _originalSize.Width + deltaX;
+                    newHeight = _originalSize.Height + deltaY;
+                    break;
+                case ResizeDirection.Bottom:
+                    newHeight = _originalSize.Height + deltaY;
+                    break;
+                case ResizeDirection.BottomLeft:
+                    newX = this.Left + deltaX;
+                    newWidth = _originalSize.Width - deltaX;
+                    newHeight = _originalSize.Height + deltaY;
+                    break;
+                case ResizeDirection.Left:
+                    newX = this.Left + deltaX;
+                    newWidth = _originalSize.Width - deltaX;
+                    break;
+                case ResizeDirection.TopLeft:
+                    newX = this.Left + deltaX;
+                    newY = this.Top + deltaY;
+                    newWidth = _originalSize.Width - deltaX;
+                    newHeight = _originalSize.Height - deltaY;
+                    break;
+            }
+
+            // 最小サイズを維持
+            newWidth = Math.Max(this.MinimumSize.Width, newWidth);
+            newHeight = Math.Max(this.MinimumSize.Height, newHeight);
+
+            // 新しいサイズと位置を適用
+            Debug.WriteLine($"Resizing: Direction={_currentResizeDirection}, NewBounds=({newX},{newY},{newWidth},{newHeight})");
+            this.SetBounds(newX, newY, newWidth, newHeight);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+
+            // 境界線を描画（視覚的フィードバック用）
+            using (var pen = new Pen(Color.FromArgb(100, 255, 255, 255), 1))
+            {
+                e.Graphics.DrawRectangle(pen, 0, 0, this.Width - 1, this.Height - 1);
+            }
+        }
+    }
+
+    internal static class NativeMethods
+    {
+        [DllImport("user32.dll")]
+        public static extern bool ReleaseCapture();
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr SendMessage(IntPtr hWnd, int Msg, int wParam, int lParam);
     }
 }
