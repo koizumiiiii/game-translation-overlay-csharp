@@ -1,4 +1,4 @@
-﻿namespace GameTranslationOverlay
+﻿namespace GameTranslationOverlay.Forms
 {
     partial class OverlayForm
     {
@@ -32,11 +32,11 @@
             // 
             // OverlayForm
             // 
-            this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 12F);
+            this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(800, 450);
+            this.ClientSize = new System.Drawing.Size(800, 600);
             this.Name = "OverlayForm";
-            this.Text = "OverlayForm";
+            this.Text = "Game Translation Overlay";
             this.ResumeLayout(false);
         }
 

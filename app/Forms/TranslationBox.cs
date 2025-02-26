@@ -1,248 +1,281 @@
 ﻿using System;
-using System.Drawing;
-using System.Windows.Forms;
-using System.Threading.Tasks;
 using System.Diagnostics;
-using GameTranslationOverlay.Core.Utils;
+using System.Drawing;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
 
 namespace GameTranslationOverlay.Forms
 {
-    public class TranslationBox : RichTextBox
+    public class TranslationBox : Form
     {
-        private const int MONITORING_INTERVAL = 500; // ミリ秒
-        private const int MIN_INTERVAL_BETWEEN_CHANGES = 1000; // ミリ秒
-        private const int MAX_CONSECUTIVE_ERRORS = 3;
+        // Win32 API定数
+        private const int WM_NCHITTEST = 0x84;
+        private const int WM_NCLBUTTONDOWN = 0xA1;
+        private const int HTCLIENT = 0x1;
+        private const int HTCAPTION = 0x2;
+        private const int HTBOTTOMRIGHT = 0x11;
+        private const int HTRIGHT = 0x6;
+        private const int HTBOTTOM = 0x15;
+        private const int HTLEFT = 0x7;
+        private const int HTTOP = 0x8;
+        private const int HTTOPLEFT = 0x13;
+        private const int HTTOPRIGHT = 0x14;
+        private const int HTBOTTOMLEFT = 0x10;
+        private const int RESIZE_BORDER = 10; // リサイズ用の境界サイズ
 
-        private readonly Rectangle _targetRegion;
-        private Timer _monitoringTimer;
-        private Bitmap _lastImage;
-        private string _lastText;
-        private bool _isMonitoring;
-        private DateTime _lastChangeTime;
-        private int _consecutiveErrors;
-        private bool _isDisposed;
+        private RichTextBox contentBox;
+        private Panel titleBar;
+        private Label titleLabel;
+        private Button closeButton;
+        private bool isResizing = false;
 
-        public event EventHandler<TextChangeEventArgs> TextChangeDetected;
+        // Win32 API インポート
+        [DllImport("user32.dll")]
+        public static extern bool ReleaseCapture();
 
-        public TranslationBox(Rectangle region) : base()
+        [DllImport("user32.dll")]
+        public static extern int SendMessage(IntPtr hWnd, int Msg, int wParam, int lParam);
+
+        [DllImport("user32.dll")]
+        static extern long GetWindowLong(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll")]
+        static extern IntPtr GetCapture();
+
+        private const int GWL_STYLE = -16;
+
+        public TranslationBox()
         {
-            _targetRegion = region;
-            InitializeBox();
-            InitializeMonitoring();
+            InitializeComponent();
+
+            // フォームの初期設定
+            this.FormBorderStyle = FormBorderStyle.None;
+            this.BackColor = Color.FromArgb(40, 40, 40);
+            this.ShowInTaskbar = false;
+            this.TopMost = true;
+            this.Size = new Size(350, 200);
+            this.StartPosition = FormStartPosition.CenterScreen;
+
+            // 透明度設定
+            this.Opacity = 0.9;
+
+            // デバッグ用のイベントハンドラ追加
+            this.Load += TranslationBox_Load;
         }
 
-        private void InitializeBox()
+        private void TranslationBox_Load(object sender, EventArgs e)
         {
-            SetStyle(ControlStyles.SupportsTransparentBackColor, true);
-
-            // 背景をより暗く、透明度を調整
-            BackColor = Color.FromArgb(220, 10, 10, 10); // より暗い背景
-            ForeColor = Color.White; // 白いテキスト
-
-            // フォントを大きくして可読性を向上
-            Font = new Font("Yu Gothic UI", 12F, FontStyle.Regular);
-
-            BorderStyle = BorderStyle.None;
-
-            // ウィンドウサイズを大きくする
-            // 位置はコンテナで決定されるので、右側に表示
-            Location = new Point(_targetRegion.Right + 20, _targetRegion.Top);
-            Size = new Size(350, 200); // より大きなサイズ
-
-            ReadOnly = true;
-            Multiline = true;
-            WordWrap = true;
-            DetectUrls = false;
-
-            // スクロールバーの表示設定
-            ScrollBars = RichTextBoxScrollBars.Vertical;
-
-            // 内部の余白を大きくする
-            Margin = new Padding(20);
-
-            Debug.WriteLine($"TranslationBox created: Location={Location}, Size={Size}");
+            // ウィンドウスタイルのデバッグ
+            DebugWindowStyles();
         }
 
-        private void InitializeMonitoring()
+        private void InitializeComponent()
         {
-            _lastChangeTime = DateTime.Now;
-            _consecutiveErrors = 0;
-
-            _monitoringTimer = new Timer();
-            _monitoringTimer.Interval = MONITORING_INTERVAL;
-            _monitoringTimer.Tick += OnMonitoringTick;
-            _monitoringTimer.Enabled = false;
-
-            try
+            // タイトルバー
+            titleBar = new Panel
             {
-                _lastImage = CaptureRegion();
+                Dock = DockStyle.Top,
+                Height = 30,
+                BackColor = Color.FromArgb(60, 60, 60)
+            };
+
+            // タイトルラベル
+            titleLabel = new Label
+            {
+                Text = "翻訳",
+                ForeColor = Color.White,
+                AutoSize = true,
+                Location = new Point(10, 8)
+            };
+
+            // 閉じるボタン
+            closeButton = new Button
+            {
+                Text = "×",
+                FlatStyle = FlatStyle.Flat,
+                Size = new Size(30, 30),
+                Dock = DockStyle.Right,
+                ForeColor = Color.White,
+                BackColor = Color.FromArgb(60, 60, 60),
+                FlatAppearance = { BorderSize = 0 }
+            };
+
+            // コンテンツボックス
+            contentBox = new RichTextBox
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(30, 30, 30),
+                ForeColor = Color.White,
+                BorderStyle = BorderStyle.None,
+                Font = new Font("Yu Gothic UI", 12F, FontStyle.Regular),
+                ReadOnly = true,
+                Margin = new Padding(20),
+                Padding = new Padding(10),
+                ScrollBars = RichTextBoxScrollBars.Vertical
+            };
+
+            // イベントハンドラの設定
+            titleBar.MouseDown += TitleBar_MouseDown;
+            closeButton.Click += CloseButton_Click;
+            this.MouseDown += TranslationBox_MouseDown;
+            this.MouseMove += TranslationBox_MouseMove;
+            this.MouseUp += TranslationBox_MouseUp;
+
+            // コントロールの追加
+            titleBar.Controls.Add(titleLabel);
+            titleBar.Controls.Add(closeButton);
+            this.Controls.Add(contentBox);
+            this.Controls.Add(titleBar);
+        }
+
+        // 翻訳テキストを設定
+        public void SetTranslationText(string text)
+        {
+            if (contentBox.InvokeRequired)
+            {
+                contentBox.BeginInvoke(new Action(() => contentBox.Text = text));
             }
-            catch (Exception ex)
+            else
             {
-                Debug.WriteLine($"Failed to capture initial region: {ex.Message}");
+                contentBox.Text = text;
             }
         }
 
-        public Rectangle TargetRegion => _targetRegion;
-
-        private async void OnMonitoringTick(object sender, EventArgs e)
+        // タイトルバーのマウスダウンイベント - ウィンドウ移動のトリガー
+        private void TitleBar_MouseDown(object sender, MouseEventArgs e)
         {
-            await Task.Run(async () => await CheckForChanges());
+            if (e.Button == MouseButtons.Left)
+            {
+                Debug.WriteLine("Title bar mouse down detected, attempting to move window");
+                ReleaseCapture();
+                SendMessage(this.Handle, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+            }
         }
 
-        private async Task CheckForChanges()
+        // 閉じるボタンクリック
+        private void CloseButton_Click(object sender, EventArgs e)
         {
-            if (!_isMonitoring || _isDisposed) return;
+            this.Hide();
+        }
 
-            try
+        // リサイズ用のマウスイベント
+        private void TranslationBox_MouseDown(object sender, MouseEventArgs e)
+        {
+            Debug.WriteLine($"MouseDown: {e.Button}, Location: {e.Location}, Time: {DateTime.Now.ToString("HH:mm:ss.fff")}");
+
+            // マウスが右下のリサイズ領域にあるかチェック
+            if (e.X >= this.Width - RESIZE_BORDER && e.Y >= this.Height - RESIZE_BORDER)
             {
-                if ((DateTime.Now - _lastChangeTime).TotalMilliseconds < MIN_INTERVAL_BETWEEN_CHANGES)
-                    return;
+                isResizing = true;  // リサイズモードをON
+                this.Cursor = Cursors.SizeNWSE;
+            }
+        }
 
-                using (var currentImage = CaptureRegion())
+        private void TranslationBox_MouseMove(object sender, MouseEventArgs e)
+        {
+            // リサイズ中のカーソルを設定
+            if (isResizing)
+            {
+                // リサイズ処理
+                this.Width = Math.Max(100, e.X);
+                this.Height = Math.Max(50, e.Y);
+            }
+            else if (e.X >= this.Width - RESIZE_BORDER && e.Y >= this.Height - RESIZE_BORDER)
+            {
+                this.Cursor = Cursors.SizeNWSE; // 右下
+            }
+            else if (e.X >= this.Width - RESIZE_BORDER)
+            {
+                this.Cursor = Cursors.SizeWE; // 右
+            }
+            else if (e.Y >= this.Height - RESIZE_BORDER)
+            {
+                this.Cursor = Cursors.SizeNS; // 下
+            }
+            else
+            {
+                this.Cursor = Cursors.Default;
+            }
+        }
+
+        private void TranslationBox_MouseUp(object sender, MouseEventArgs e)
+        {
+            Debug.WriteLine("Mouse up detected");
+            isResizing = false;  // リサイズモードをOFF
+            this.Cursor = Cursors.Default;
+            CheckMouseCapture();
+        }
+
+        // WndProcのオーバーライドでウィンドウメッセージを処理
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+
+            // NCHITTEST メッセージの処理
+            if (m.Msg == WM_NCHITTEST && (int)m.Result == HTCLIENT)
+            {
+                Point screenPoint = new Point(m.LParam.ToInt32() & 0xFFFF, m.LParam.ToInt32() >> 16);
+                Point clientPoint = this.PointToClient(screenPoint);
+
+                // デバッグ出力
+                // Debug.WriteLine($"Mouse position: {clientPoint.X}, {clientPoint.Y}");
+
+                // リサイズ用のヒットテスト
+                if (clientPoint.X <= RESIZE_BORDER)
                 {
-                    if (currentImage == null) return;
-
-                    await Task.Run(() =>
-                    {
-                        if (TextDetectionUtil.HasSignificantChange(_lastImage, currentImage, _lastText, Text))
-                        {
-                            _lastChangeTime = DateTime.Now;
-                            var oldImage = _lastImage;
-                            _lastImage = (Bitmap)currentImage.Clone();
-                            oldImage?.Dispose();
-
-                            BeginInvoke(new Action(() => OnPossibleTextChange()));
-                            _consecutiveErrors = 0;
-                            Debug.WriteLine($"Text change detected in region: {_targetRegion}");
-                        }
-                    });
+                    if (clientPoint.Y <= RESIZE_BORDER)
+                        m.Result = (IntPtr)HTTOPLEFT;
+                    else if (clientPoint.Y >= this.ClientSize.Height - RESIZE_BORDER)
+                        m.Result = (IntPtr)HTBOTTOMLEFT;
+                    else
+                        m.Result = (IntPtr)HTLEFT;
+                }
+                else if (clientPoint.X >= this.ClientSize.Width - RESIZE_BORDER)
+                {
+                    if (clientPoint.Y <= RESIZE_BORDER)
+                        m.Result = (IntPtr)HTTOPRIGHT;
+                    else if (clientPoint.Y >= this.ClientSize.Height - RESIZE_BORDER)
+                        m.Result = (IntPtr)HTBOTTOMRIGHT;
+                    else
+                        m.Result = (IntPtr)HTRIGHT;
+                }
+                else if (clientPoint.Y <= RESIZE_BORDER)
+                {
+                    m.Result = (IntPtr)HTTOP;
+                }
+                else if (clientPoint.Y >= this.ClientSize.Height - RESIZE_BORDER)
+                {
+                    m.Result = (IntPtr)HTBOTTOM;
                 }
             }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error in CheckForChanges: {ex.Message}");
-                _consecutiveErrors++;
+        }
 
-                if (_consecutiveErrors >= MAX_CONSECUTIVE_ERRORS)
-                {
-                    StopMonitoring();
-                    Debug.WriteLine("Monitoring stopped due to consecutive errors");
-                }
+        // CreateParamsのオーバーライド - リサイズ可能なウィンドウスタイルを設定
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.Style |= 0x00040000; // WS_SIZEBOX
+                Debug.WriteLine($"CreateParams: Style={cp.Style.ToString("X8")}");
+                return cp;
             }
         }
 
-        private Bitmap CaptureRegion()
+        // デバッグ用メソッド - ウィンドウスタイルの確認
+        private void DebugWindowStyles()
         {
-            if (_isDisposed) return null;
-
-            try
-            {
-                var bitmap = new Bitmap(_targetRegion.Width, _targetRegion.Height);
-                using (var g = Graphics.FromImage(bitmap))
-                {
-                    g.CopyFromScreen(_targetRegion.Location, Point.Empty, _targetRegion.Size);
-                }
-                return bitmap;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error capturing region: {ex.Message}");
-                return null;
-            }
+            long style = GetWindowLong(this.Handle, GWL_STYLE);
+            Debug.WriteLine($"Window style: 0x{style.ToString("X8")}");
+            // WS_SIZEBOX (0x00040000) が含まれているか確認
+            Debug.WriteLine($"Has WS_SIZEBOX: {(style & 0x00040000) != 0}");
         }
 
-        private void OnPossibleTextChange()
+        // デバッグ用メソッド - マウスキャプチャ状態の確認
+        private void CheckMouseCapture()
         {
-            if (_isDisposed) return;
-
-            try
-            {
-                TextChangeDetected?.Invoke(this, new TextChangeEventArgs(_targetRegion));
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error in OnPossibleTextChange: {ex.Message}");
-            }
-        }
-
-        public void StartMonitoring()
-        {
-            if (_isDisposed) return;
-
-            _isMonitoring = true;
-            _monitoringTimer.Start();
-            Debug.WriteLine("Monitoring started");
-        }
-
-        public void StopMonitoring()
-        {
-            if (_isDisposed) return;
-
-            _isMonitoring = false;
-            _monitoringTimer.Stop();
-            Debug.WriteLine("Monitoring stopped");
-        }
-
-        public void UpdateText(string newText)
-        {
-            if (_isDisposed) return;
-
-            if (_lastText != newText)
-            {
-                if (InvokeRequired)
-                {
-                    BeginInvoke(new Action(() => UpdateText(newText)));
-                    return;
-                }
-
-                Clear(); // 既存のテキストをクリア
-
-                // 書式設定を適用
-                SelectionFont = new Font(Font.FontFamily, Font.Size, FontStyle.Bold);
-                SelectionColor = Color.White;
-
-                // テキストの追加 (20ピクセルの余白を維持)
-                SelectionIndent = 20;
-                SelectionRightIndent = 20;
-                SelectionHangingIndent = 0;
-
-                AppendText(newText);
-
-                _lastText = newText;
-                Debug.WriteLine($"Text updated: {newText}");
-            }
-        }
-
-        public void RemoveHighlight()
-        {
-            if (_isDisposed) return;
-            StopMonitoring();
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (!_isDisposed)
-            {
-                if (disposing)
-                {
-                    StopMonitoring();
-                    _monitoringTimer?.Dispose();
-                    _lastImage?.Dispose();
-                }
-                _isDisposed = true;
-            }
-            base.Dispose(disposing);
-        }
-    }
-
-    public class TextChangeEventArgs : EventArgs
-    {
-        public Rectangle Region { get; }
-
-        public TextChangeEventArgs(Rectangle region)
-        {
-            Region = region;
+            IntPtr captureHandle = GetCapture();
+            Debug.WriteLine($"Current capture: {captureHandle}, Form handle: {this.Handle}");
         }
     }
 }
