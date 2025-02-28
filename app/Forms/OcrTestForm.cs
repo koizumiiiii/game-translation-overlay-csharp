@@ -120,7 +120,7 @@ namespace GameTranslationOverlay.Forms
             }
         }
 
-        private void DisplayResults(List<Core.OCR.OcrTest.TestResult> results)
+        private void DisplayResults(List<Core.OCR.OcrTest.OcrTestResult> results)
         {
             _resultsListBox.Items.Clear();
             _resultsListBox.Items.Add("OCR Test Results:");
@@ -129,7 +129,8 @@ namespace GameTranslationOverlay.Forms
             foreach (var result in results)
             {
                 _resultsListBox.Items.Add($"Engine: {result.EngineName}");
-                _resultsListBox.Items.Add($"Config: {result.Configuration}");
+                // Configuration は存在しないので削除または代替値を使用
+                // _resultsListBox.Items.Add($"Config: {result.Configuration}");
                 _resultsListBox.Items.Add($"Time: {result.ProcessingTime}ms");
                 _resultsListBox.Items.Add($"Accuracy: {result.Accuracy:P2}");
                 _resultsListBox.Items.Add($"Text: {result.RecognizedText}");

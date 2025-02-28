@@ -67,6 +67,8 @@
     <Compile Include="Core\OCR\Benchmark\OcrBenchmarkTest.cs" />
     <Compile Include="Core\OCR\OcrTest.cs" />
     <Compile Include="Core\OCR\PaddleOcrEngine.cs" />
+    <Compile Include="Core\OCR\TextDetectionService.cs" />
+    <Compile Include="Core\OCR\TextRegion.cs" />
     <Compile Include="Core\OCR\Utils\WindowsRuntimeExtensions.cs" />
     <Compile Include="Core\Translation\Configuration\TranslationConfig.cs" />
     <Compile Include="Core\Translation\Exceptions\TranslationException.cs" />
@@ -74,7 +76,9 @@
     <Compile Include="Core\Translation\Models\TranslationModels.cs" />
     <Compile Include="Core\Translation\Services\LibreTranslateEngine.cs" />
     <Compile Include="Core\Translation\Services\TranslationCache.cs" />
+    <Compile Include="Core\Utils\ScreenCapture.cs" />
     <Compile Include="Core\Utils\TextDetectionUtil.cs" />
+    <Compile Include="Core\WindowManagement\WindowSelector.cs" />
     <Compile Include="Forms\MainForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -95,6 +99,9 @@
       <DependentUpon>OverlayForm.cs</DependentUpon>
     </Compile>
     <Compile Include="Forms\TranslationBox.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\WindowSelectorForm.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Utils\DebugHelper.cs" />

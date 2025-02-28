@@ -1,96 +1,138 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Threading.Tasks;
+using GameTranslationOverlay.Core.Utils;
 using Tesseract;
 
 namespace GameTranslationOverlay.Core.OCR
 {
-    /// <summary>
-    /// OCR implementation using Tesseract
-    /// </summary>
-    public class TesseractOcrEngine : IOcrEngine, IDisposable
+    public class TesseractOcrEngine : IOcrEngine
     {
-        private TesseractEngine _engine;
-        private bool _isInitialized;
-        private bool _disposed;
+        private TesseractEngine _tesseractEngine;
+        private bool _isDisposed = false;
+        private string _language = "jpn";
+        private string _dataPath = "tessdata";
 
-        /// <summary>
-        /// Initializes the Tesseract engine
-        /// </summary>
         public async Task InitializeAsync()
         {
-            if (_disposed)
-                throw new ObjectDisposedException(nameof(TesseractOcrEngine));
-
-            try
+            await Task.Run(() =>
             {
-                await Task.Run(() =>
+                try
                 {
-                    _engine = new TesseractEngine(@"./tessdata", "jpn", EngineMode.Default);
-                    _isInitialized = true;
-                });
-            }
-            catch (Exception ex)
-            {
-                _isInitialized = false;
-                throw new InvalidOperationException("Failed to initialize OCR engine.", ex);
-            }
-        }
-
-        /// <summary>
-        /// Performs OCR on the specified region
-        /// </summary>
-        public async Task<string> RecognizeTextAsync(Rectangle region)
-        {
-            if (_disposed)
-                throw new ObjectDisposedException(nameof(TesseractOcrEngine));
-
-            if (!_isInitialized)
-                throw new InvalidOperationException("OCR engine is not initialized.");
-
-            if (region.Width <= 0 || region.Height <= 0)
-                throw new ArgumentException("Invalid region size.", nameof(region));
-
-            return await Task.Run(() =>
-            {
-                using (var bitmap = new Bitmap(region.Width, region.Height))
-                {
-                    using (var graphics = Graphics.FromImage(bitmap))
+                    if (!Directory.Exists(_dataPath))
                     {
-                        graphics.CopyFromScreen(region.Location, Point.Empty, region.Size);
+                        Debug.WriteLine($"Directory does not exist: {_dataPath}");
+                        throw new DirectoryNotFoundException($"Tesseract data directory not found: {_dataPath}");
                     }
 
-                    using (var pix = PixConverter.ToPix(bitmap))
-                    {
-                        using (var page = _engine.Process(pix))
-                        {
-                            return page.GetText();
-                        }
-                    }
+                    _tesseractEngine = new TesseractEngine(_dataPath, _language, EngineMode.Default);
+                    Debug.WriteLine("Tesseract engine initialized successfully");
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Failed to initialize Tesseract: {ex.Message}");
+                    throw;
                 }
             });
         }
 
-        /// <summary>
-        /// Disposes of resources
-        /// </summary>
-        public void Dispose()
+        public async Task<string> RecognizeTextAsync(Rectangle region)
         {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-
-        protected virtual void Dispose(bool disposing)
-        {
-            if (_disposed)
-                return;
-
-            if (disposing)
+            if (_tesseractEngine == null)
             {
-                _engine?.Dispose();
+                throw new InvalidOperationException("Tesseract engine not initialized");
             }
 
-            _disposed = true;
+            return await Task.Run(() =>
+            {
+                try
+                {
+                    using (Bitmap screenshot = ScreenCapture.CaptureRegion(region))
+                    {
+                        if (screenshot == null)
+                        {
+                            Debug.WriteLine("Screenshot is null");
+                            return string.Empty;
+                        }
+
+                        using (var page = _tesseractEngine.Process(screenshot))
+                        {
+                            string result = page.GetText();
+                            return result?.Trim() ?? string.Empty;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Error in Tesseract recognition: {ex.Message}");
+                    return $"OCR Error: {ex.Message}";
+                }
+            });
+        }
+
+        // 新規追加メソッド - テキスト領域の検出
+        public async Task<List<TextRegion>> DetectTextRegionsAsync(Bitmap image)
+        {
+            if (_tesseractEngine == null)
+            {
+                throw new InvalidOperationException("Tesseract engine not initialized");
+            }
+
+            return await Task.Run(() =>
+            {
+                List<TextRegion> regions = new List<TextRegion>();
+
+                try
+                {
+                    using (var page = _tesseractEngine.Process(image))
+                    {
+                        using (var iterator = page.GetIterator())
+                        {
+                            iterator.Begin();
+
+                            do
+                            {
+                                if (iterator.IsAtBeginningOf(PageIteratorLevel.TextLine))
+                                {
+                                    Rect bounds;
+                                    if (iterator.TryGetBoundingBox(PageIteratorLevel.TextLine, out bounds))
+                                    {
+                                        string lineText = iterator.GetText(PageIteratorLevel.TextLine);
+                                        float confidence = iterator.GetConfidence(PageIteratorLevel.TextLine) / 100.0f;
+
+                                        if (!string.IsNullOrWhiteSpace(lineText))
+                                        {
+                                            regions.Add(new TextRegion(
+                                                new Rectangle(bounds.X1, bounds.Y1, bounds.Width, bounds.Height),
+                                                lineText.Trim(),
+                                                confidence
+                                            ));
+                                        }
+                                    }
+                                }
+                            } while (iterator.Next(PageIteratorLevel.TextLine));
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Error detecting text regions with Tesseract: {ex.Message}");
+                }
+
+                return regions;
+            });
+        }
+
+        public void Dispose()
+        {
+            if (!_isDisposed)
+            {
+                _tesseractEngine?.Dispose();
+                _isDisposed = true;
+            }
         }
     }
 }

@@ -14,6 +14,7 @@ using GameTranslationOverlay.Core.Region;
 using GameTranslationOverlay.Core.Translation;
 using GameTranslationOverlay.Core.Translation.Interfaces;
 using GameTranslationOverlay.Core.Translation.Services;
+using GameTranslationOverlay.Core.WindowManagement;
 using GameTranslationOverlay.Utils;
 
 namespace GameTranslationOverlay.Forms
@@ -41,6 +42,15 @@ namespace GameTranslationOverlay.Forms
 
         // クリックスルーの状態
         private bool isClickThrough = true;
+
+        // ターゲットウィンドウ
+        private IntPtr targetWindowHandle = IntPtr.Zero;
+
+        // テキスト検出関連
+        private TextDetectionService textDetectionService;
+        private List<TextRegion> textRegions = new List<TextRegion>();
+        private bool showTextRegions = true;
+        private TextRegion selectedTextRegion = null;
 
         // ホットキーID定数
         private const int HOTKEY_TOGGLE_OVERLAY = 9001;    // Ctrl+Shift+O
@@ -133,14 +143,104 @@ namespace GameTranslationOverlay.Forms
             {
                 translationEngine = new LibreTranslateEngine();
                 Debug.WriteLine("Translation engine created successfully");
+
+                // 初期化が完了するまで待機
+                Task.Run(async () => {
+                    try
+                    {
+                        await ((LibreTranslateEngine)translationEngine).InitializeAsync();
+                        Debug.WriteLine("Translation engine initialized successfully");
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"Error initializing translation engine: {ex.Message}");
+                    }
+                });
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error creating translation engine: {ex.Message}");
             }
 
+            // テキスト検出サービスの初期化
+            textDetectionService = new TextDetectionService(ocrEngine);
+            textDetectionService.OnRegionsDetected += TextDetectionService_RegionsDetected;
+
             // ホットキーの登録
             RegisterHotkeys();
+        }
+
+        // テキスト検出結果イベントハンドラ
+        private void TextDetectionService_RegionsDetected(object sender, List<TextRegion> regions)
+        {
+            textRegions = regions;
+            this.Invalidate(); // 画面を再描画
+        }
+
+        // テキスト検出の切替メソッド
+        public bool ToggleTextDetection()
+        {
+            showTextRegions = !showTextRegions;
+
+            if (showTextRegions)
+            {
+                // クリックスルーを一時的に無効化してテキスト領域の選択を可能に
+                SetClickThrough(false);
+            }
+            else
+            {
+                // クリックスルーを有効化
+                SetClickThrough(true);
+                // 選択解除
+                selectedTextRegion = null;
+            }
+
+            this.Invalidate(); // 画面を再描画
+            Debug.WriteLine($"テキスト検出表示: {(showTextRegions ? "有効" : "無効")}");
+            return showTextRegions;
+        }
+
+        // ターゲットウィンドウを設定
+        public void SetTargetWindow(IntPtr handle)
+        {
+            targetWindowHandle = handle;
+
+            // テキスト検出サービスにターゲットウィンドウを設定
+            textDetectionService.SetTargetWindow(handle);
+
+            // ウィンドウの矩形情報を取得
+            WindowSelector.RECT rect;
+            if (WindowSelector.GetWindowRect(handle, out rect))
+            {
+                // オーバーレイの位置とサイズを設定
+                this.Location = new Point(rect.Left, rect.Top);
+                this.Size = new Size(
+                    rect.Right - rect.Left,
+                    rect.Bottom - rect.Top);
+
+                Debug.WriteLine($"オーバーレイをウィンドウに合わせました: {rect.Left}, {rect.Top}, {rect.Right - rect.Left}, {rect.Bottom - rect.Top}");
+
+                // テキスト検出を開始
+                textDetectionService.Start();
+            }
+            else
+            {
+                Debug.WriteLine("ウィンドウの矩形情報を取得できませんでした");
+            }
+        }
+
+        // オーバーレイの位置を更新
+        public void UpdateOverlayPosition(Rectangle newBounds)
+        {
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() => UpdateOverlayPosition(newBounds)));
+                return;
+            }
+
+            this.Location = new Point(newBounds.Left, newBounds.Top);
+            this.Size = new Size(newBounds.Width, newBounds.Height);
+            Debug.WriteLine($"オーバーレイの位置を更新しました: {newBounds}");
         }
 
         // マウスフック処理
@@ -151,6 +251,11 @@ namespace GameTranslationOverlay.Forms
                 MSLLHOOKSTRUCT hookStruct = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(MSLLHOOKSTRUCT));
                 Point screenPoint = new Point(hookStruct.pt.x, hookStruct.pt.y);
                 Point clientPoint = this.PointToClient(screenPoint);
+
+                // カーソルを十字に設定
+                this.BeginInvoke(new Action(() => {
+                    Cursor.Current = Cursors.Cross;
+                }));
 
                 if (wParam.ToInt32() == WM_LBUTTONDOWN)
                 {
@@ -407,10 +512,13 @@ namespace GameTranslationOverlay.Forms
                 // フォームを確実にアクティブ化
                 this.Activate();
                 this.BringToFront();
-                Application.DoEvents();
 
-                // カーソル設定
+                // カーソル設定を強制
+                this.Cursor = Cursors.Cross;
                 Cursor.Current = Cursors.Cross;
+
+                // 強制的にカーソルを更新
+                Application.DoEvents();
 
                 Debug.WriteLine("Region select mode enabled");
             }
@@ -426,6 +534,7 @@ namespace GameTranslationOverlay.Forms
                 SetClickThrough(true);
 
                 // カーソル設定
+                this.Cursor = Cursors.Default;
                 Cursor.Current = Cursors.Default;
 
                 Debug.WriteLine("Region select mode disabled");
@@ -461,6 +570,12 @@ namespace GameTranslationOverlay.Forms
         // 翻訳テキストの表示
         public void ShowTranslation(string translatedText)
         {
+            // 翻訳エラーの場合は表示を調整
+            if (translatedText.StartsWith("Translation error:"))
+            {
+                translatedText = "翻訳エラー: 翻訳エンジンの初期化をしています。しばらくお待ちください。";
+            }
+
             if (translationBox == null || translationBox.IsDisposed)
             {
                 translationBox = new TranslationBox();
@@ -537,10 +652,84 @@ namespace GameTranslationOverlay.Forms
             }
         }
 
+        // テキスト領域の翻訳
+        private async void TranslateTextRegion(TextRegion region)
+        {
+            if (region != null && !string.IsNullOrWhiteSpace(region.Text))
+            {
+                try
+                {
+                    Debug.WriteLine($"テキスト領域を翻訳: {region.Text}");
+
+                    // 翻訳処理
+                    string translatedText = string.Empty;
+                    if (translationEngine != null)
+                    {
+                        try
+                        {
+                            translatedText = await translationEngine.TranslateAsync(region.Text, "ja", "en");
+                            Debug.WriteLine($"翻訳結果: {translatedText}");
+                        }
+                        catch (Exception ex)
+                        {
+                            translatedText = $"Translation error: {ex.Message}";
+                            Debug.WriteLine($"翻訳エラー: {ex.Message}");
+                        }
+                    }
+                    else
+                    {
+                        translatedText = $"Translation engine not available. Text detected: {region.Text}";
+                        Debug.WriteLine("翻訳エンジンが利用できません");
+                    }
+
+                    // 翻訳結果の表示
+                    ShowTranslation(translatedText);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"テキスト領域の翻訳エラー: {ex.Message}");
+                }
+            }
+        }
+
+        // テキスト領域クリック処理
+        private void CheckTextRegionClick(Point clientPoint)
+        {
+            if (!isClickThrough && showTextRegions && textRegions != null && textRegions.Count > 0)
+            {
+                // クライアント座標をスクリーン座標に変換
+                Point screenPoint = this.PointToScreen(clientPoint);
+
+                foreach (var region in textRegions)
+                {
+                    if (region.Bounds.Contains(screenPoint))
+                    {
+                        selectedTextRegion = region;
+                        this.Invalidate(); // 画面を再描画
+
+                        // クリックされたテキスト領域を翻訳
+                        TranslateTextRegion(region);
+                        return;
+                    }
+                }
+            }
+        }
+
         // ウィンドウメッセージの処理
         protected override void WndProc(ref Message m)
         {
             base.WndProc(ref m);
+
+            // テキスト領域クリック処理
+            if (m.Msg == 0x0201) // WM_LBUTTONDOWN
+            {
+                int x = m.LParam.ToInt32() & 0xFFFF;
+                int y = m.LParam.ToInt32() >> 16;
+                Point clientPoint = new Point(x, y);
+
+                // テキスト領域がクリックされたかチェック
+                CheckTextRegionClick(clientPoint);
+            }
 
             // ホットキーメッセージの処理
             if (m.Msg == 0x0312) // WM_HOTKEY
@@ -577,13 +766,88 @@ namespace GameTranslationOverlay.Forms
         {
             base.OnPaint(e);
 
+            // 選択範囲の描画
             if (!selectionRectangle.IsEmpty)
             {
-                Debug.WriteLine($"Painting selection rectangle: {selectionRectangle}");
-                e.Graphics.DrawRectangle(selectionPen, selectionRectangle);
-                using (SolidBrush brush = new SolidBrush(Color.FromArgb(50, 255, 0, 0)))
+                // 非常に薄い半透明の塗りつぶし（アルファ値15）
+                using (SolidBrush brush = new SolidBrush(Color.FromArgb(15, 0, 120, 215))) // 薄い青色
                 {
                     e.Graphics.FillRectangle(brush, selectionRectangle);
+                }
+
+                // はっきりした枠線（青色）
+                using (Pen borderPen = new Pen(Color.FromArgb(220, 0, 120, 215), 2))
+                {
+                    e.Graphics.DrawRectangle(borderPen, selectionRectangle);
+                }
+
+                // 角を強調するマーカー（オプション）
+                int markerSize = 5;
+                using (Pen cornerPen = new Pen(Color.White, 2))
+                {
+                    // 左上の角
+                    e.Graphics.DrawLine(cornerPen,
+                        selectionRectangle.Left, selectionRectangle.Top,
+                        selectionRectangle.Left + markerSize, selectionRectangle.Top);
+                    e.Graphics.DrawLine(cornerPen,
+                        selectionRectangle.Left, selectionRectangle.Top,
+                        selectionRectangle.Left, selectionRectangle.Top + markerSize);
+
+                    // 右上の角
+                    e.Graphics.DrawLine(cornerPen,
+                        selectionRectangle.Right, selectionRectangle.Top,
+                        selectionRectangle.Right - markerSize, selectionRectangle.Top);
+                    e.Graphics.DrawLine(cornerPen,
+                        selectionRectangle.Right, selectionRectangle.Top,
+                        selectionRectangle.Right, selectionRectangle.Top + markerSize);
+
+                    // 左下の角
+                    e.Graphics.DrawLine(cornerPen,
+                        selectionRectangle.Left, selectionRectangle.Bottom,
+                        selectionRectangle.Left + markerSize, selectionRectangle.Bottom);
+                    e.Graphics.DrawLine(cornerPen,
+                        selectionRectangle.Left, selectionRectangle.Bottom,
+                        selectionRectangle.Left, selectionRectangle.Bottom - markerSize);
+
+                    // 右下の角
+                    e.Graphics.DrawLine(cornerPen,
+                        selectionRectangle.Right, selectionRectangle.Bottom,
+                        selectionRectangle.Right - markerSize, selectionRectangle.Bottom);
+                    e.Graphics.DrawLine(cornerPen,
+                        selectionRectangle.Right, selectionRectangle.Bottom,
+                        selectionRectangle.Right, selectionRectangle.Bottom - markerSize);
+                }
+            }
+
+            // 検出されたテキスト領域の描画
+            if (showTextRegions && textRegions != null && textRegions.Count > 0)
+            {
+                foreach (var region in textRegions)
+                {
+                    // クライアント座標に変換
+                    Rectangle clientRect = new Rectangle(
+                        region.Bounds.X - this.Location.X,
+                        region.Bounds.Y - this.Location.Y,
+                        region.Bounds.Width,
+                        region.Bounds.Height
+                    );
+
+                    // 選択されたテキスト領域の場合は異なる色で強調表示
+                    Color regionColor = (region == selectedTextRegion) ?
+                        Color.FromArgb(180, 255, 50, 50) : // 選択中：赤色
+                        Color.FromArgb(80, 0, 200, 0);     // 未選択：緑色
+
+                    // 領域を塗りつぶし
+                    using (SolidBrush brush = new SolidBrush(regionColor))
+                    {
+                        e.Graphics.FillRectangle(brush, clientRect);
+                    }
+
+                    // 領域の枠線
+                    using (Pen pen = new Pen(Color.FromArgb(220, regionColor), 1))
+                    {
+                        e.Graphics.DrawRectangle(pen, clientRect);
+                    }
                 }
             }
         }
@@ -631,6 +895,46 @@ namespace GameTranslationOverlay.Forms
             {
                 Debug.WriteLine($"Error unregistering hotkeys on form close: {ex.Message}");
             }
+        }
+
+        // リソース解放
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // Designer.cs のコード
+                if (components != null)
+                {
+                    components.Dispose();
+                }
+
+                // 追加のリソース解放
+                textDetectionService?.Dispose();
+
+                // その他のリソース解放コード
+                if (textChangeDetectionTimer != null)
+                {
+                    textChangeDetectionTimer.Stop();
+                    textChangeDetectionTimer.Dispose();
+                }
+
+                selectionPen?.Dispose();
+
+                if (translationBox != null && !translationBox.IsDisposed)
+                {
+                    translationBox.Dispose();
+                }
+
+                try
+                {
+                    UnregisterHotkeys();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Error unregistering hotkeys on dispose: {ex.Message}");
+                }
+            }
+            base.Dispose(disposing);
         }
     }
 }

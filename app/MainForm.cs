@@ -17,14 +17,10 @@ namespace GameTranslationOverlay
         [DllImport("user32.dll")]
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
-        private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
-        private const uint SWP_NOMOVE = 0x0002;
-        private const uint SWP_NOSIZE = 0x0001;
-
-        // readonlyを削除
         private Button _benchmarkButton;
         private Button _selectWindowButton;
         private Button _startTranslationButton;
+        private Button _toggleTextDetectionButton;
         private MenuStrip _menuStrip;
         private Label _hotkeyInfoLabel;
         private Label _statusLabel;
@@ -32,6 +28,10 @@ namespace GameTranslationOverlay
         private TesseractOcrEngine _ocrEngine;
         private WindowSelector.WindowInfo _selectedWindow;
         private Timer _checkWindowTimer;
+
+        private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+        private const uint SWP_NOMOVE = 0x0002;
+        private const uint SWP_NOSIZE = 0x0001;
 
         public MainForm()
         {
@@ -84,11 +84,22 @@ namespace GameTranslationOverlay
             _startTranslationButton.Click += StartTranslationButton_Click;
             this.Controls.Add(_startTranslationButton);
 
+            // テキスト検出切替ボタン
+            _toggleTextDetectionButton = new Button
+            {
+                Text = "テキスト検出切替",
+                Location = new Point(12, _startTranslationButton.Bottom + 12),
+                Size = new Size(120, 30),
+                Enabled = false
+            };
+            _toggleTextDetectionButton.Click += ToggleTextDetectionButton_Click;
+            this.Controls.Add(_toggleTextDetectionButton);
+
             // ベンチマークボタン
             _benchmarkButton = new Button
             {
                 Text = "Run OCR Benchmark",
-                Location = new Point(12, _startTranslationButton.Bottom + 12),
+                Location = new Point(12, _toggleTextDetectionButton.Bottom + 12),
                 Size = new Size(120, 30)
             };
             _benchmarkButton.Click += async (sender, e) => await RunBenchmark();
@@ -215,7 +226,18 @@ namespace GameTranslationOverlay
             {
                 _overlayForm.SetTargetWindow(_selectedWindow.Handle);
                 _checkWindowTimer.Start();
+                _toggleTextDetectionButton.Enabled = true;
                 UpdateStatus($"翻訳実行中: {_selectedWindow.Title}");
+            }
+        }
+
+        private void ToggleTextDetectionButton_Click(object sender, EventArgs e)
+        {
+            if (_overlayForm != null)
+            {
+                bool newState = _overlayForm.ToggleTextDetection();
+                _toggleTextDetectionButton.Text = newState ? "テキスト検出 OFF" : "テキスト検出 ON";
+                UpdateStatus($"テキスト検出: {(newState ? "有効" : "無効")}");
             }
         }
 
