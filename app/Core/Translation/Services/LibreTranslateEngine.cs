@@ -1,284 +1,162 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Net.Http;
-using System.Text;
-using System.Text.Json;
 using System.Threading.Tasks;
 using System.Diagnostics;
 using System.Linq;
-using System.Text.RegularExpressions;
 using GameTranslationOverlay.Core.Translation.Interfaces;
 using GameTranslationOverlay.Core.Translation.Models;
 using GameTranslationOverlay.Core.Translation.Exceptions;
+using Newtonsoft.Json;
 
 namespace GameTranslationOverlay.Core.Translation.Services
 {
-    public class LibreTranslateEngine : ITranslationEngine, IDisposable
+    public class LibreTranslateEngine : ITranslationEngine
     {
-        private readonly HttpClient _httpClient;
-        private readonly string _baseUrl;
-        private readonly JsonSerializerOptions _jsonOptions;
-        private readonly Settings _settings;
-        private readonly ITranslationCache _cache;
-        private bool _isInitialized;
-        private bool _disposed;
-        private ISet<string> _supportedLanguages;
-        private List<LanguageInfo> _languageInfos;
+        private readonly string baseUrl;
+        private readonly HttpClient httpClient;
+        private bool isInitialized = false;
+        private List<LanguageInfo> supportedLanguages = new List<LanguageInfo>();
 
-        public bool IsAvailable => _isInitialized && !_disposed;
-
-        public IEnumerable<string> SupportedLanguages => _supportedLanguages ?? new HashSet<string>();
-
-        public class Settings
+        public LibreTranslateEngine(string baseUrl = "http://localhost:5000")
         {
-            public string BaseUrl { get; set; } = "http://localhost:5000";
-            public int Timeout { get; set; } = 10000;
-            public int MaxRetries { get; set; } = 3;
-            public int RetryDelay { get; set; } = 1000;
-        }
-
-        public LibreTranslateEngine(Settings settings = null, ITranslationCache cache = null)
-        {
-            _settings = settings ?? new Settings();
-            _cache = cache;
-            _baseUrl = _settings.BaseUrl.TrimEnd('/');
-
-            _httpClient = new HttpClient
-            {
-                Timeout = TimeSpan.FromMilliseconds(_settings.Timeout)
-            };
-
-            _jsonOptions = new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true,
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-            };
-
-            _supportedLanguages = new HashSet<string>();
-            _languageInfos = new List<LanguageInfo>();
-            Debug.WriteLine($"LibreTranslateEngine initialized with base URL: {_baseUrl}");
-        }
-
-        public async Task<string> TranslateAsync(string text, string fromLang, string toLang)
-        {
-            if (_disposed)
-                throw new ObjectDisposedException(nameof(LibreTranslateEngine));
-
-            if (!_isInitialized)
-                throw new InvalidOperationException("Translation engine is not initialized.");
-
-            if (string.IsNullOrWhiteSpace(text))
-                return string.Empty;
-
-            ValidateLanguageCodes(fromLang, toLang);
-
-            // テキストの前処理
-            text = PreprocessText(text);
-            Debug.WriteLine($"Preprocessed text for translation: {text}");
-
-            // キャッシュのチェック
-            if (_cache != null)
-            {
-                var cacheKey = $"{fromLang}:{toLang}:{text}";
-                var cachedTranslation = _cache.GetTranslation(cacheKey);
-                if (cachedTranslation != null)
-                {
-                    Debug.WriteLine("Translation found in cache");
-                    return cachedTranslation;
-                }
-            }
-
-            var retryCount = 0;
-            while (retryCount < _settings.MaxRetries)
-            {
-                try
-                {
-                    var translation = await ExecuteTranslationAsync(text, fromLang, toLang);
-
-                    // キャッシュに保存
-                    if (_cache != null)
-                    {
-                        var cacheKey = $"{fromLang}:{toLang}:{text}";
-                        _cache.SetTranslation(cacheKey, translation);
-                    }
-
-                    return translation;
-                }
-                catch (HttpRequestException ex)
-                {
-                    Debug.WriteLine($"Translation attempt {retryCount + 1} failed: {ex.Message}");
-
-                    if (retryCount == _settings.MaxRetries - 1)
-                        throw new ConnectionException("Translation failed after maximum retries.", ex);
-
-                    await Task.Delay(_settings.RetryDelay);
-                    retryCount++;
-                }
-            }
-
-            throw new TranslationServerException("Translation failed unexpectedly.");
-        }
-
-        private string PreprocessText(string text)
-        {
-            try
-            {
-                // 改行を空白に置換
-                text = text.Replace("\n", " ").Replace("\r", " ");
-
-                // 連続する空白を単一の空白に
-                text = Regex.Replace(text, @"\s+", " ");
-
-                // キャメルケースやパスカルケースの単語間にスペースを挿入
-                text = Regex.Replace(text, @"(?<!^)(?=[A-Z][a-z])|(?<!^)(?=[0-9])|(?<=[a-z])(?=[0-9])", " ");
-
-                // URLは処理から除外（スペースを削除）
-                text = Regex.Replace(text, @"https?://\S+", match => match.Value.Replace(" ", ""));
-
-                // 最終的な整形
-                text = text.Trim();
-
-                Debug.WriteLine($"Text preprocessing result: {text}");
-                return text;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Text preprocessing error: {ex.Message}");
-                return text; // エラー時は元のテキストを返す
-            }
-        }
-
-        private async Task<string> ExecuteTranslationAsync(string text, string fromLang, string toLang)
-        {
-            var request = new LibreTranslateRequest
-            {
-                Q = text,
-                Source = fromLang,
-                Target = toLang
-            };
-
-            var json = JsonSerializer.Serialize(request, _jsonOptions);
-            Debug.WriteLine($"Translation request payload: {json}");
-
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            try
-            {
-                var response = await _httpClient.PostAsync($"{_baseUrl}/translate", content);
-                var responseContent = await response.Content.ReadAsStringAsync();
-                Debug.WriteLine($"Translation response: {responseContent}");
-
-                response.EnsureSuccessStatusCode();
-
-                var result = JsonSerializer.Deserialize<LibreTranslateResponse>(responseContent, _jsonOptions);
-                return result?.TranslatedText ?? text;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Translation execution error: {ex}");
-                throw;
-            }
+            this.baseUrl = baseUrl;
+            this.httpClient = new HttpClient();
+            this.httpClient.Timeout = TimeSpan.FromSeconds(10);
         }
 
         public async Task InitializeAsync()
         {
-            if (_disposed)
-                throw new ObjectDisposedException(nameof(LibreTranslateEngine));
-
             try
             {
-                await CheckServerHealthAsync();
-                await FetchSupportedLanguagesAsync();
-
-                _isInitialized = true;
-                Debug.WriteLine("LibreTranslateEngine initialization completed successfully");
+                // サーバー接続確認
+                var response = await httpClient.GetAsync($"{baseUrl}/languages");
+                if (response.IsSuccessStatusCode)
+                {
+                    var content = await response.Content.ReadAsStringAsync();
+                    supportedLanguages = JsonConvert.DeserializeObject<List<LanguageInfo>>(content);
+                    isInitialized = true;
+                    Debug.WriteLine("LibreTranslate server connected successfully");
+                }
+                else
+                {
+                    throw new Exception($"サーバーに接続できません。ステータスコード: {response.StatusCode}");
+                }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"LibreTranslateEngine initialization failed: {ex.Message}");
-                _isInitialized = false;
-                throw new ConnectionException("Failed to initialize translation engine.", ex);
+                Debug.WriteLine($"LibreTranslate initialization error: {ex.Message}");
+                throw new Exception("翻訳サーバーへの接続に失敗しました。サーバーが起動しているか確認してください。", ex);
             }
         }
 
-        private async Task CheckServerHealthAsync()
+        public async Task<string> TranslateAsync(string text, string fromLang, string toLang)
         {
+            if (!isInitialized)
+            {
+                Debug.WriteLine("Warning: Translation engine not initialized");
+                throw new Exception("翻訳エンジンが初期化されていません。");
+            }
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                Debug.WriteLine("Warning: Empty text provided for translation");
+                return string.Empty;
+            }
+
             try
             {
-                var response = await _httpClient.GetAsync($"{_baseUrl}/languages");
+                Debug.WriteLine($"Translating: '{text.Substring(0, Math.Min(30, text.Length))}...' from {fromLang} to {toLang}");
+
+                var content = new FormUrlEncodedContent(new[]
+                {
+                    new KeyValuePair<string, string>("q", text),
+                    new KeyValuePair<string, string>("source", fromLang),
+                    new KeyValuePair<string, string>("target", toLang)
+                });
+
+                var response = await httpClient.PostAsync($"{baseUrl}/translate", content);
                 response.EnsureSuccessStatusCode();
-                Debug.WriteLine("Server health check passed");
+
+                var responseString = await response.Content.ReadAsStringAsync();
+                Debug.WriteLine($"Response received: {responseString}");
+
+                var translationResponse = JsonConvert.DeserializeObject<LibreTranslateResponse>(responseString);
+
+                if (string.IsNullOrEmpty(translationResponse?.TranslatedText))
+                {
+                    throw new Exception("翻訳結果が無効です。");
+                }
+
+                Debug.WriteLine($"Translation result: '{translationResponse.TranslatedText.Substring(0, Math.Min(30, translationResponse.TranslatedText.Length))}...'");
+                return translationResponse.TranslatedText;
+            }
+            catch (HttpRequestException ex)
+            {
+                Debug.WriteLine($"HTTP Request Error: {ex.Message}");
+                throw new Exception($"翻訳サーバーへの接続エラー: {ex.Message}", ex);
+            }
+            catch (JsonException ex)
+            {
+                Debug.WriteLine($"JSON Parsing Error: {ex.Message}");
+                throw new Exception("翻訳結果の解析に失敗しました", ex);
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Server health check failed: {ex.Message}");
-                throw new ConnectionException("Translation server is not available.", ex);
+                Debug.WriteLine($"Translation Error: {ex.Message}");
+                throw new Exception($"翻訳処理エラー: {ex.Message}", ex);
             }
         }
 
-        private async Task FetchSupportedLanguagesAsync()
+        public bool IsAvailable => isInitialized;
+
+        public IEnumerable<string> SupportedLanguages => GetSupportedLanguageCodes();
+
+        private IEnumerable<string> GetSupportedLanguageCodes()
         {
-            try
+            if (supportedLanguages.Count > 0)
             {
-                var response = await _httpClient.GetAsync($"{_baseUrl}/languages");
-                response.EnsureSuccessStatusCode();
-
-                var content = await response.Content.ReadAsStringAsync();
-                Debug.WriteLine($"Supported languages response: {content}");
-
-                _languageInfos = JsonSerializer.Deserialize<List<LanguageInfo>>(content, _jsonOptions);
-                _supportedLanguages = new HashSet<string>(
-                    _languageInfos.Select(l => l.Code),
-                    StringComparer.OrdinalIgnoreCase
-                );
-
-                Debug.WriteLine($"Fetched supported languages: {string.Join(", ", _supportedLanguages)}");
+                return supportedLanguages.Select(l => l.Code);
             }
-            catch (Exception ex)
+
+            // 基本的な言語のリスト（フォールバック）
+            return new[] { "en", "ja", "zh", "ko", "fr", "de", "es", "ru" };
+        }
+
+        // インターフェース要件を満たすために追加
+        public async Task<IEnumerable<LanguageInfo>> GetSupportedLanguagesAsync()
+        {
+            if (!isInitialized)
             {
-                Debug.WriteLine($"Failed to fetch supported languages: {ex.Message}");
-                throw new TranslationServerException("Failed to get supported languages.", ex);
+                try
+                {
+                    await InitializeAsync();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Failed to initialize: {ex.Message}");
+                    throw;
+                }
             }
-        }
 
-        private void ValidateLanguageCodes(string fromLang, string toLang)
-        {
-            if (!_supportedLanguages.Contains(fromLang))
-                throw new UnsupportedLanguageException(fromLang);
-
-            if (!_supportedLanguages.Contains(toLang))
-                throw new UnsupportedLanguageException(toLang);
-        }
-
-        public Task<IEnumerable<LanguageInfo>> GetSupportedLanguagesAsync()
-        {
-            if (_disposed)
-                throw new ObjectDisposedException(nameof(LibreTranslateEngine));
-
-            if (!_isInitialized)
-                throw new InvalidOperationException("Translation engine is not initialized.");
-
-            return Task.FromResult<IEnumerable<LanguageInfo>>(_languageInfos);
-        }
-
-        public void Dispose()
-        {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-
-        protected virtual void Dispose(bool disposing)
-        {
-            if (_disposed)
-                return;
-
-            if (disposing)
+            if (supportedLanguages.Count == 0)
             {
-                _httpClient?.Dispose();
-                Debug.WriteLine("LibreTranslateEngine disposed");
+                try
+                {
+                    var response = await httpClient.GetAsync($"{baseUrl}/languages");
+                    response.EnsureSuccessStatusCode();
+
+                    var content = await response.Content.ReadAsStringAsync();
+                    supportedLanguages = JsonConvert.DeserializeObject<List<LanguageInfo>>(content);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Failed to get languages: {ex.Message}");
+                    throw new Exception("言語リストの取得に失敗しました。", ex);
+                }
             }
 
-            _disposed = true;
+            return supportedLanguages;
         }
     }
 }

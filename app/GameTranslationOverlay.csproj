@@ -76,6 +76,7 @@
     <Compile Include="Core\Translation\Models\TranslationModels.cs" />
     <Compile Include="Core\Translation\Services\LibreTranslateEngine.cs" />
     <Compile Include="Core\Translation\Services\TranslationCache.cs" />
+    <Compile Include="Core\Translation\Services\TranslationManager.cs" />
     <Compile Include="Core\Utils\ScreenCapture.cs" />
     <Compile Include="Core\Utils\TextDetectionUtil.cs" />
     <Compile Include="Core\WindowManagement\WindowSelector.cs" />

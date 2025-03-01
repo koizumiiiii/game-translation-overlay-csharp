@@ -1,73 +1,91 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using GameTranslationOverlay.Core.Translation.Configuration;
 using GameTranslationOverlay.Core.Translation.Interfaces;
 
 namespace GameTranslationOverlay.Core.Translation.Services
 {
-    public class TranslationCache : ITranslationCache
+    public class TranslationCache
     {
-        private readonly ConcurrentDictionary<string, CacheEntry> _cache;
-        private readonly TranslationConfig _config;
+        private readonly Dictionary<string, CacheEntry> cache = new Dictionary<string, CacheEntry>();
+        private readonly int maxEntries;
 
-        public TranslationCache(TranslationConfig config)
+        public TranslationCache(int maxEntries = 100)
         {
-            _config = config ?? throw new ArgumentNullException(nameof(config));
-            _cache = new ConcurrentDictionary<string, CacheEntry>();
+            this.maxEntries = maxEntries;
         }
 
-        public string GetTranslation(string key)
+        public string GetTranslation(string text, string sourceLang, string targetLang)
         {
-            if (_cache.TryGetValue(key, out var entry))
-            {
-                if (DateTime.UtcNow - entry.Timestamp <= _config.CacheExpiration)
-                {
-                    return entry.Translation;
-                }
+            string key = GenerateKey(text, sourceLang, targetLang);
 
-                _cache.TryRemove(key, out var _);
+            if (cache.TryGetValue(key, out CacheEntry entry))
+            {
+                entry.LastAccessed = DateTime.Now;
+                return entry.TranslatedText;
             }
 
             return null;
         }
 
-        public void SetTranslation(string key, string translation)
+        public void AddTranslation(string text, string translatedText, string sourceLang, string targetLang)
         {
-            var entry = new CacheEntry
+            if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(translatedText))
             {
-                Translation = translation,
-                Timestamp = DateTime.UtcNow
-            };
-
-            _cache.AddOrUpdate(key, entry, (k, v) => entry);
-
-            if (_cache.Count > _config.CacheSize)
-            {
-                CleanupCache();
+                return;
             }
-        }
 
-        public void Clear()
-        {
-            _cache.Clear();
-        }
+            string key = GenerateKey(text, sourceLang, targetLang);
 
-        private void CleanupCache()
-        {
-            var expiredTime = DateTime.UtcNow - _config.CacheExpiration;
-            foreach (var key in _cache.Keys)
+            // キャッシュがいっぱいなら古いエントリを削除
+            if (cache.Count >= maxEntries && !cache.ContainsKey(key))
             {
-                if (_cache.TryGetValue(key, out var entry) && entry.Timestamp < expiredTime)
+                RemoveOldestEntry();
+            }
+
+            cache[key] = new CacheEntry
+            {
+                SourceText = text,
+                TranslatedText = translatedText,
+                SourceLang = sourceLang,
+                TargetLang = targetLang,
+                LastAccessed = DateTime.Now
+            };
+        }
+
+        private string GenerateKey(string text, string sourceLang, string targetLang)
+        {
+            return $"{sourceLang}|{targetLang}|{text}";
+        }
+
+        private void RemoveOldestEntry()
+        {
+            DateTime oldestTime = DateTime.MaxValue;
+            string oldestKey = null;
+
+            foreach (var pair in cache)
+            {
+                if (pair.Value.LastAccessed < oldestTime)
                 {
-                    _cache.TryRemove(key, out var _);
+                    oldestTime = pair.Value.LastAccessed;
+                    oldestKey = pair.Key;
                 }
+            }
+
+            if (oldestKey != null)
+            {
+                cache.Remove(oldestKey);
             }
         }
 
         private class CacheEntry
         {
-            public string Translation { get; set; }
-            public DateTime Timestamp { get; set; }
+            public string SourceText { get; set; }
+            public string TranslatedText { get; set; }
+            public string SourceLang { get; set; }
+            public string TargetLang { get; set; }
+            public DateTime LastAccessed { get; set; }
         }
     }
 }
