@@ -5,26 +5,35 @@ using System.Drawing;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using GameTranslationOverlay.Core.WindowManagement;
+using GameTranslationOverlay.Utils;
+using GameTranslationOverlay.Core.UI;
 
 namespace GameTranslationOverlay.Core.OCR
 {
-    public class TextDetectionService
+    public class TextDetectionService : IDisposable
     {
-        private IOcrEngine ocrEngine;
+        // プロパティと変数の定義をそのまま維持
+        private readonly IOcrEngine ocrEngine;
         private Timer detectionTimer;
         private List<TextRegion> detectedRegions = new List<TextRegion>();
         private IntPtr targetWindowHandle;
+        private bool disposed = false;
         private bool isRunning = false;
-        private int detectionInterval = 1000; // 1秒ごとに検出（調整可能）
-        private float minimumConfidence = 0.6f; // 最低信頼度（これより低いテキストは無視）
+        private int noRegionsDetectedCount = 0;
+        private const int NO_REGIONS_THRESHOLD = 3;
+        private int detectionInterval = 1000;
+        private float minimumConfidence = 0.6f;
 
-        // 検出結果イベント
+        // プロパティの定義
+        public bool IsRunning => isRunning;
+
+        // イベント
         public event EventHandler<List<TextRegion>> OnRegionsDetected;
+        public event EventHandler OnNoRegionsDetected;
 
         public TextDetectionService(IOcrEngine ocrEngine)
         {
-            this.ocrEngine = ocrEngine;
+            this.ocrEngine = ocrEngine ?? throw new ArgumentNullException(nameof(ocrEngine));
 
             // 検出タイマーの初期化
             detectionTimer = new Timer
@@ -97,16 +106,16 @@ namespace GameTranslationOverlay.Core.OCR
                 }
 
                 // ウィンドウの矩形情報を取得
-                WindowSelector.RECT rect;
-                if (!WindowSelector.GetWindowRect(targetWindowHandle, out rect))
+                Rectangle rect = WindowUtils.GetWindowRect(targetWindowHandle);
+                if (rect.IsEmpty)
                 {
                     Debug.WriteLine("ウィンドウの矩形情報を取得できませんでした");
                     return;
                 }
 
                 // ウィンドウが最小化されていないか確認
-                int width = rect.Right - rect.Left;
-                int height = rect.Bottom - rect.Top;
+                int width = rect.Width;
+                int height = rect.Height;
                 if (width <= 0 || height <= 0)
                 {
                     Debug.WriteLine("ウィンドウが最小化されているか、サイズが無効です");
@@ -114,7 +123,7 @@ namespace GameTranslationOverlay.Core.OCR
                 }
 
                 // ウィンドウをキャプチャ
-                using (Bitmap windowCapture = WindowSelector.CaptureWindow(targetWindowHandle))
+                using (Bitmap windowCapture = ScreenCapture.CaptureWindow(targetWindowHandle))
                 {
                     if (windowCapture == null)
                     {
@@ -128,31 +137,46 @@ namespace GameTranslationOverlay.Core.OCR
                     // 最低信頼度でフィルタリング
                     regions = regions.Where(r => r.Confidence >= minimumConfidence).ToList();
 
-                    // 検出領域がない場合は通知しない
-                    if (regions.Count == 0)
-                    {
-                        Debug.WriteLine("テキスト領域は検出されませんでした");
-                        detectedRegions = regions;
-                        return;
-                    }
+                    // 前回と今回の検出結果を比較
+                    bool hadRegionsBefore = detectedRegions.Count > 0;
+                    bool hasRegionsNow = regions.Count > 0;
 
                     // スクリーン座標に変換
-                    foreach (var region in regions)
+                    if (hasRegionsNow)
                     {
-                        // キャプチャ内の相対座標からスクリーン座標に変換
-                        region.Bounds = new Rectangle(
-                            rect.Left + region.Bounds.X,
-                            rect.Top + region.Bounds.Y,
-                            region.Bounds.Width,
-                            region.Bounds.Height);
+                        foreach (var region in regions)
+                        {
+                            // キャプチャ内の相対座標からスクリーン座標に変換
+                            region.Bounds = new Rectangle(
+                                rect.Left + region.Bounds.X,
+                                rect.Top + region.Bounds.Y,
+                                region.Bounds.Width,
+                                region.Bounds.Height);
+                        }
+
+                        // 検出結果を保存
+                        detectedRegions = regions;
+                        noRegionsDetectedCount = 0;
+
+                        // 結果を通知
+                        Debug.WriteLine($"{regions.Count}個のテキスト領域を検出しました");
+                        OnRegionsDetected?.Invoke(this, regions);
                     }
+                    else
+                    {
+                        // テキスト領域が検出されなかった
+                        Debug.WriteLine("テキスト領域は検出されませんでした");
+                        noRegionsDetectedCount++;
 
-                    // 検出結果を保存
-                    detectedRegions = regions;
-
-                    // 結果を通知
-                    Debug.WriteLine($"{regions.Count}個のテキスト領域を検出しました");
-                    OnRegionsDetected?.Invoke(this, regions);
+                        // しきい値を超えて検出されなかった場合
+                        if (hadRegionsBefore && noRegionsDetectedCount >= NO_REGIONS_THRESHOLD)
+                        {
+                            detectedRegions.Clear();
+                            OnNoRegionsDetected?.Invoke(this, EventArgs.Empty);
+                            Debug.WriteLine($"テキスト領域が{NO_REGIONS_THRESHOLD}回連続で検出されなかったため、クリーンアップイベントを発行します");
+                            noRegionsDetectedCount = 0;
+                        }
+                    }
                 }
             }
             catch (Exception ex)

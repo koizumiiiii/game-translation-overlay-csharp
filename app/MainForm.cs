@@ -4,11 +4,13 @@ using System.Drawing;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
 using GameTranslationOverlay.Core.OCR;
-using GameTranslationOverlay.Core.WindowManagement;
+using GameTranslationOverlay.Core.UI;
 using GameTranslationOverlay.Forms;
 using System.Threading.Tasks;
 using System.Linq;
 using System.IO;
+using GameTranslationOverlay.Utils;
+using GameTranslationOverlay.Core.Models;
 
 namespace GameTranslationOverlay
 {
@@ -26,7 +28,7 @@ namespace GameTranslationOverlay
         private Label _statusLabel;
         private OverlayForm _overlayForm;
         private TesseractOcrEngine _ocrEngine;
-        private WindowSelector.WindowInfo _selectedWindow;
+        private GameTranslationOverlay.Core.Models.WindowInfo _selectedWindow;
         private Timer _checkWindowTimer;
 
         private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
@@ -35,8 +37,8 @@ namespace GameTranslationOverlay
 
         public MainForm()
         {
-            Debug.WriteLine("MainForm: コンストラクタ開始");
             InitializeComponent();
+            Debug.WriteLine("MainForm: コンストラクタ開始");
 
             // ホットキー情報ラベル
             _hotkeyInfoLabel = new Label
@@ -131,6 +133,20 @@ namespace GameTranslationOverlay
             Debug.WriteLine("MainForm: コンストラクタ完了");
         }
 
+        private void InitializeComponent()
+        {
+            this.SuspendLayout();
+            // 
+            // MainForm
+            // 
+            this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
+            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+            this.ClientSize = new System.Drawing.Size(800, 450);
+            this.Name = "MainForm";
+            this.Text = "Game Translation Overlay";
+            this.ResumeLayout(false);
+        }
+
         private void InitializeMenu()
         {
             _menuStrip = new MenuStrip();
@@ -215,6 +231,17 @@ namespace GameTranslationOverlay
                     {
                         _startTranslationButton.Enabled = true;
                         UpdateStatus($"選択: {_selectedWindow.Title}");
+
+                        // オーバーレイフォームに対象ウィンドウを設定して自動検出を開始
+                        if (_overlayForm != null)
+                        {
+                            _overlayForm.SetTargetWindow(_selectedWindow.Handle);
+                            _checkWindowTimer.Start();
+                            _toggleTextDetectionButton.Enabled = true;
+                            _overlayForm.StartTextDetection();
+
+                            UpdateStatus($"翻訳実行中: {_selectedWindow.Title}");
+                        }
                     }
                 }
             }
@@ -248,8 +275,9 @@ namespace GameTranslationOverlay
             {
                 try
                 {
-                    WindowSelector.RECT rect;
-                    if (!WindowSelector.GetWindowRect(_selectedWindow.Handle, out rect))
+                    // WindowSelector.RECTをWindowUtils.GetWindowRectに変更
+                    Rectangle rect = WindowUtils.GetWindowRect(_selectedWindow.Handle);
+                    if (rect.IsEmpty)
                     {
                         // ウィンドウが見つからない場合
                         _checkWindowTimer.Stop();
@@ -260,14 +288,10 @@ namespace GameTranslationOverlay
                     else
                     {
                         // ウィンドウの位置やサイズが変わっていたら調整
-                        Rectangle newBounds = new Rectangle(
-                            rect.Left, rect.Top,
-                            rect.Right - rect.Left, rect.Bottom - rect.Top);
-
-                        if (newBounds != _selectedWindow.Bounds)
+                        if (rect != _selectedWindow.Bounds)
                         {
-                            _selectedWindow.Bounds = newBounds;
-                            _overlayForm.UpdateOverlayPosition(newBounds);
+                            _selectedWindow.Bounds = rect;
+                            _overlayForm.UpdateOverlayPosition(rect);
                         }
                     }
                 }

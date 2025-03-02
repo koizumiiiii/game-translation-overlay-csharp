@@ -4,40 +4,46 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
-using GameTranslationOverlay.Core.OCR;
 using GameTranslationOverlay.Utils;
+using GameTranslationOverlay.Core.UI;
 
-namespace GameTranslationOverlay.Core.TextDetection
+namespace GameTranslationOverlay.Core.OCR
 {
     /// <summary>
     /// テキスト検出サービス
     /// </summary>
-    public class TextDetectionService : IDisposable
+    public class LegacyTextDetectionService : IDisposable
     {
         private readonly IOcrEngine ocrEngine;
         private Timer detectionTimer;
         private List<TextRegion> detectedRegions = new List<TextRegion>();
         private IntPtr targetWindowHandle;
         private bool disposed = false;
+        private bool isRunning = false;
+
+        // IsRunningプロパティを追加
+        public bool IsRunning => isRunning;
 
         // テキスト領域が検出されなかった連続回数
         private int noRegionsDetectedCount = 0;
 
         // テキスト領域が検出されなくなったと判断するしきい値
         private const int NO_REGIONS_THRESHOLD = 3;
+        private int detectionInterval = 1000; // 1秒ごとに検出（調整可能）
+        private float minimumConfidence = 0.6f; // 最低信頼度（これより低いテキストは無視）
 
         /// <summary>
         /// コンストラクタ
         /// </summary>
         /// <param name="ocrEngine">OCRエンジン</param>
-        public TextDetectionService(IOcrEngine ocrEngine)
+        public LegacyTextDetectionService(IOcrEngine ocrEngine)
         {
             this.ocrEngine = ocrEngine ?? throw new ArgumentNullException(nameof(ocrEngine));
 
             // 定期的なテキスト検出用タイマー
             detectionTimer = new Timer
             {
-                Interval = 1000, // 1秒ごとに検出（適宜調整）
+                Interval = detectionInterval,
                 Enabled = false
             };
             detectionTimer.Tick += DetectionTimer_Tick;
@@ -66,8 +72,12 @@ namespace GameTranslationOverlay.Core.TextDetection
                 return;
             }
 
-            detectionTimer.Start();
-            Debug.WriteLine("テキスト検出サービスを開始しました");
+            if (!isRunning)
+            {
+                isRunning = true;
+                detectionTimer.Start();
+                Debug.WriteLine("テキスト検出サービスを開始しました");
+            }
         }
 
         /// <summary>
@@ -75,8 +85,19 @@ namespace GameTranslationOverlay.Core.TextDetection
         /// </summary>
         public void Stop()
         {
-            detectionTimer.Stop();
-            Debug.WriteLine("テキスト検出サービスを停止しました");
+            if (isRunning)
+            {
+                detectionTimer.Stop();
+                isRunning = false;
+                Debug.WriteLine("テキスト検出サービスを停止しました");
+            }
+        }
+
+        public void SetDetectionInterval(int milliseconds)
+        {
+            detectionInterval = milliseconds;
+            detectionTimer.Interval = milliseconds;
+            Debug.WriteLine($"検出間隔を{milliseconds}ミリ秒に設定しました");
         }
 
         /// <summary>
@@ -125,20 +146,32 @@ namespace GameTranslationOverlay.Core.TextDetection
                     // テキスト領域の検出
                     var regions = await ocrEngine.DetectTextRegionsAsync(windowCapture);
 
+                    // 最低信頼度でフィルタリング
+                    regions = regions.Where(r => r.Confidence >= minimumConfidence).ToList();
+
                     // 前回と今回の検出結果を比較
                     bool hadRegionsBefore = detectedRegions.Count > 0;
                     bool hasRegionsNow = regions.Count > 0;
 
+                    // スクリーン座標に変換
                     if (hasRegionsNow)
                     {
-                        // テキスト領域が検出された
-                        noRegionsDetectedCount = 0;
-                        Debug.WriteLine($"{regions.Count}個のテキスト領域を検出しました");
+                        foreach (var region in regions)
+                        {
+                            // キャプチャ内の相対座標からスクリーン座標に変換
+                            region.Bounds = new Rectangle(
+                                windowRect.Left + region.Bounds.X,
+                                windowRect.Top + region.Bounds.Y,
+                                region.Bounds.Width,
+                                region.Bounds.Height);
+                        }
 
-                        // 検出された領域を保存
+                        // 検出結果を保存
                         detectedRegions = regions;
+                        noRegionsDetectedCount = 0;
 
-                        // テキスト領域が検出されたことを通知
+                        // 結果を通知
+                        Debug.WriteLine($"{regions.Count}個のテキスト領域を検出しました");
                         OnRegionsDetected?.Invoke(this, regions);
                     }
                     else
@@ -165,7 +198,7 @@ namespace GameTranslationOverlay.Core.TextDetection
             finally
             {
                 // タイマーを再開（オブジェクトが破棄されていない場合のみ）
-                if (!disposed && targetWindowHandle != IntPtr.Zero)
+                if (!disposed && isRunning && targetWindowHandle != IntPtr.Zero)
                 {
                     detectionTimer.Start();
                 }
@@ -227,7 +260,7 @@ namespace GameTranslationOverlay.Core.TextDetection
         /// <summary>
         /// ファイナライザ
         /// </summary>
-        ~TextDetectionService()
+        ~LegacyTextDetectionService()
         {
             Dispose(false);
         }

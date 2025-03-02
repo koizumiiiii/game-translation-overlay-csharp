@@ -1,15 +1,32 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Threading.Tasks;
 
 namespace GameTranslationOverlay.Core.OCR
 {
-    public interface IOcrEngine : System.IDisposable
+    /// <summary>
+    /// OCRエンジンのインターフェース
+    /// </summary>
+    public interface IOcrEngine : IDisposable
     {
-        Task<string> RecognizeTextAsync(Rectangle region);
+        /// <summary>
+        /// 初期化
+        /// </summary>
         Task InitializeAsync();
 
-        // 新規追加メソッド - テキスト領域検出
+        /// <summary>
+        /// テキスト認識
+        /// </summary>
+        /// <param name="region">認識対象の領域</param>
+        /// <returns>認識したテキスト</returns>
+        Task<string> RecognizeTextAsync(Rectangle region);
+
+        /// <summary>
+        /// 画像からテキスト領域を検出
+        /// </summary>
+        /// <param name="image">テキスト検出対象の画像</param>
+        /// <returns>検出したテキスト領域のリスト</returns>
         Task<List<TextRegion>> DetectTextRegionsAsync(Bitmap image);
     }
 }

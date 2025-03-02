@@ -1,266 +1,178 @@
 ﻿using System;
-using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Windows.Forms;
-using GameTranslationOverlay.Core.WindowManagement;
+using GameTranslationOverlay.Core.UI;
+using GameTranslationOverlay.Core.Models;
 
 namespace GameTranslationOverlay.Forms
 {
+    /// <summary>
+    /// ウィンドウ選択ダイアログ
+    /// </summary>
     public class WindowSelectorForm : Form
     {
         private ListView windowListView;
         private Button selectButton;
         private Button cancelButton;
-        private Button refreshButton;
-        private CheckBox showDesktopCheckBox;
-        private TextBox searchBox;
-
         private ImageList thumbnailImageList;
-        private List<WindowSelector.WindowInfo> allWindows;
+        private Label instructionLabel;
 
-        public WindowSelector.WindowInfo SelectedWindow { get; private set; }
+        /// <summary>
+        /// 選択されたウィンドウ情報
+        /// </summary>
+        public WindowInfo SelectedWindow { get; private set; }
 
+        /// <summary>
+        /// コンストラクタ
+        /// </summary>
         public WindowSelectorForm()
         {
-            InitializeComponent();
+            InitializeComponents();
             LoadWindowList();
         }
 
-        private void InitializeComponent()
+        /// <summary>
+        /// コンポーネントの初期化
+        /// </summary>
+        private void InitializeComponents()
         {
-            // フォーム設定
             this.Text = "翻訳対象ウィンドウの選択";
-            this.Size = new Size(700, 500);
-            this.MinimumSize = new Size(600, 400);
-            this.FormBorderStyle = FormBorderStyle.Sizable;
-            this.StartPosition = FormStartPosition.CenterParent;
+            this.Size = new Size(640, 520);
+            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.MaximizeBox = false;
+            this.MinimizeBox = false;
+            this.StartPosition = FormStartPosition.CenterScreen;
             this.Icon = SystemIcons.Application;
 
-            // 検索ボックス
-            searchBox = new TextBox
+            // 説明ラベル
+            instructionLabel = new Label
             {
-                Dock = DockStyle.Top,
-                Height = 28,
-                Text = "ウィンドウ名で検索...",
-                ForeColor = SystemColors.GrayText,
-                Font = new Font("Yu Gothic UI", 9F)
+                Text = "翻訳したいゲームやアプリケーションのウィンドウを選択してください。",
+                Location = new Point(12, 12),
+                Size = new Size(600, 20),
+                AutoSize = false
             };
 
-            // イベントハンドラを追加してプレースホルダーの動作を実装
-            searchBox.Enter += (s, e) =>
-            {
-                if (searchBox.Text == "ウィンドウ名で検索...")
-                {
-                    searchBox.Text = "";
-                    searchBox.ForeColor = SystemColors.WindowText;
-                }
-            };
-            searchBox.Leave += (s, e) =>
-            {
-                if (string.IsNullOrWhiteSpace(searchBox.Text))
-                {
-                    searchBox.Text = "ウィンドウ名で検索...";
-                    searchBox.ForeColor = SystemColors.GrayText;
-                }
-            };
-            searchBox.TextChanged += SearchBox_TextChanged;
-
-            // サムネイル用のイメージリスト
+            // サムネイル用のImageList
             thumbnailImageList = new ImageList
             {
-                ImageSize = new Size(120, 80),
+                ImageSize = new Size(160, 120),
                 ColorDepth = ColorDepth.Depth32Bit
             };
 
-            // ウィンドウリストビュー
+            // ウィンドウリスト
             windowListView = new ListView
             {
-                Dock = DockStyle.Fill,
-                View = View.Tile,
+                Location = new Point(12, 40),
+                Size = new Size(600, 400),
+                View = View.LargeIcon,
                 LargeImageList = thumbnailImageList,
-                TileSize = new Size(400, 100),
-                Font = new Font("Yu Gothic UI", 9F),
-                FullRowSelect = true,
+                HideSelection = false,
                 MultiSelect = false,
-                HideSelection = false
+                FullRowSelect = true
             };
             windowListView.SelectedIndexChanged += WindowListView_SelectedIndexChanged;
             windowListView.DoubleClick += WindowListView_DoubleClick;
 
-            // デスクトップを表示するチェックボックス
-            showDesktopCheckBox = new CheckBox
-            {
-                Text = "デスクトップを表示",
-                Checked = false,
-                AutoSize = true,
-                Font = new Font("Yu Gothic UI", 9F)
-            };
-            showDesktopCheckBox.CheckedChanged += ShowDesktopCheckBox_CheckedChanged;
-
-            // 更新ボタン
-            refreshButton = new Button
-            {
-                Text = "更新",
-                Width = 80,
-                Height = 30,
-                Font = new Font("Yu Gothic UI", 9F)
-            };
-            refreshButton.Click += RefreshButton_Click;
-
-            // 選択ボタン
+            // ボタン
             selectButton = new Button
             {
                 Text = "選択",
-                Width = 80,
-                Height = 30,
-                Enabled = false,
-                Font = new Font("Yu Gothic UI", 9F)
+                Location = new Point(456, 450),
+                Size = new Size(75, 23),
+                Enabled = false
             };
             selectButton.Click += SelectButton_Click;
 
-            // キャンセルボタン
             cancelButton = new Button
             {
                 Text = "キャンセル",
-                Width = 80,
-                Height = 30,
-                Font = new Font("Yu Gothic UI", 9F)
+                Location = new Point(537, 450),
+                Size = new Size(75, 23)
             };
             cancelButton.Click += CancelButton_Click;
 
-            // ボタンパネル
-            FlowLayoutPanel buttonPanel = new FlowLayoutPanel
-            {
-                Dock = DockStyle.Bottom,
-                Height = 50,
-                FlowDirection = FlowDirection.RightToLeft,
-                Padding = new Padding(5)
-            };
-            buttonPanel.Controls.Add(cancelButton);
-            buttonPanel.Controls.Add(selectButton);
-            buttonPanel.Controls.Add(refreshButton);
-
-            // 検索パネル
-            Panel searchPanel = new Panel
-            {
-                Dock = DockStyle.Top,
-                Height = 40,
-                Padding = new Padding(5)
-            };
-            searchPanel.Controls.Add(searchBox);
-            searchPanel.Controls.Add(showDesktopCheckBox);
-
-            // チェックボックス位置調整
-            showDesktopCheckBox.Location = new Point(
-                searchBox.Right + 10,
-                (searchPanel.Height - showDesktopCheckBox.Height) / 2
-            );
-
             // コントロールの追加
+            this.Controls.Add(instructionLabel);
             this.Controls.Add(windowListView);
-            this.Controls.Add(buttonPanel);
-            this.Controls.Add(searchPanel);
+            this.Controls.Add(selectButton);
+            this.Controls.Add(cancelButton);
 
-            // イベントハンドラの接続
-            this.Load += WindowSelectorForm_Load;
-            this.Resize += WindowSelectorForm_Resize;
+            // キャンセル動作の設定
+            this.CancelButton = cancelButton;
         }
 
-        private void WindowSelectorForm_Load(object sender, EventArgs e)
-        {
-            AdjustListViewColumns();
-        }
-
-        private void WindowSelectorForm_Resize(object sender, EventArgs e)
-        {
-            AdjustListViewColumns();
-        }
-
-        private void AdjustListViewColumns()
-        {
-            // タイルビューのサイズ調整
-            windowListView.TileSize = new Size(windowListView.Width - 30, 100);
-        }
-
+        /// <summary>
+        /// ウィンドウリストの読み込み
+        /// </summary>
         private void LoadWindowList()
         {
-            // カーソルを待機カーソルに変更
-            Cursor = Cursors.WaitCursor;
-
             try
             {
+                Cursor.Current = Cursors.WaitCursor;
                 windowListView.Items.Clear();
                 thumbnailImageList.Images.Clear();
 
                 // ウィンドウリストの取得
-                allWindows = WindowSelector.GetWindows();
+                var windows = WindowSelector.GetAllWindows();
 
-                // リストビューにウィンドウ情報を追加
-                UpdateWindowList();
+                int imageIndex = 0;
+                foreach (var window in windows)
+                {
+                    if (window.Thumbnail != null)
+                    {
+                        thumbnailImageList.Images.Add(window.Thumbnail);
+
+                        ListViewItem item = new ListViewItem
+                        {
+                            Text = window.Title,
+                            ImageIndex = imageIndex++,
+                            Tag = window
+                        };
+
+                        windowListView.Items.Add(item);
+                    }
+                }
+
+                Debug.WriteLine($"{windowListView.Items.Count}個のウィンドウをリストに読み込みました");
+
+                // ウィンドウが見つからない場合
+                if (windowListView.Items.Count == 0)
+                {
+                    MessageBox.Show(
+                        "表示可能なウィンドウが見つかりませんでした。\n別のアプリケーションを起動してからもう一度お試しください。",
+                        "情報",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"ウィンドウリストの読み込み中にエラーが発生しました: {ex.Message}");
+                MessageBox.Show(
+                    $"ウィンドウの列挙中にエラーが発生しました: {ex.Message}",
+                    "エラー",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
             }
             finally
             {
-                Cursor = Cursors.Default;
+                Cursor.Current = Cursors.Default;
             }
         }
 
-        private void UpdateWindowList()
-        {
-            windowListView.BeginUpdate();
-            windowListView.Items.Clear();
-            thumbnailImageList.Images.Clear();
-
-            foreach (var window in allWindows)
-            {
-                // デスクトップ表示の制御
-                if (!showDesktopCheckBox.Checked && (
-                    window.ProcessName.Equals("explorer", StringComparison.OrdinalIgnoreCase) &&
-                    (window.Title.Equals("Program Manager", StringComparison.OrdinalIgnoreCase) ||
-                     window.Title.Equals("プログラム マネージャー", StringComparison.OrdinalIgnoreCase))))
-                {
-                    continue;
-                }
-
-                // 検索フィルタリング
-                string searchText = searchBox.Text.Trim().ToLower();
-                if (!string.IsNullOrEmpty(searchText) &&
-                    !window.Title.ToLower().Contains(searchText) &&
-                    !window.ProcessName.ToLower().Contains(searchText))
-                {
-                    continue;
-                }
-
-                // サムネイル画像の追加
-                int imageIndex = -1;
-                if (window.Thumbnail != null)
-                {
-                    thumbnailImageList.Images.Add(window.Thumbnail);
-                    imageIndex = thumbnailImageList.Images.Count - 1;
-                }
-
-                // リストアイテムの作成
-                ListViewItem item = new ListViewItem
-                {
-                    Text = window.Title,
-                    ImageIndex = imageIndex,
-                    Tag = window
-                };
-
-                // サブアイテムの追加
-                item.SubItems.Add(window.ProcessName);
-                item.SubItems.Add($"{window.Bounds.Width}x{window.Bounds.Height}");
-
-                windowListView.Items.Add(item);
-            }
-
-            windowListView.EndUpdate();
-        }
-
+        /// <summary>
+        /// ウィンドウリストの選択変更イベント
+        /// </summary>
         private void WindowListView_SelectedIndexChanged(object sender, EventArgs e)
         {
             selectButton.Enabled = windowListView.SelectedItems.Count > 0;
         }
 
+        /// <summary>
+        /// ウィンドウリストのダブルクリックイベント
+        /// </summary>
         private void WindowListView_DoubleClick(object sender, EventArgs e)
         {
             if (windowListView.SelectedItems.Count > 0)
@@ -269,46 +181,55 @@ namespace GameTranslationOverlay.Forms
             }
         }
 
-        private void RefreshButton_Click(object sender, EventArgs e)
-        {
-            LoadWindowList();
-        }
-
+        /// <summary>
+        /// 選択ボタンのクリックイベント
+        /// </summary>
         private void SelectButton_Click(object sender, EventArgs e)
         {
             SelectCurrentWindow();
         }
 
+        /// <summary>
+        /// キャンセルボタンのクリックイベント
+        /// </summary>
         private void CancelButton_Click(object sender, EventArgs e)
         {
             this.DialogResult = DialogResult.Cancel;
             this.Close();
         }
 
-        private void ShowDesktopCheckBox_CheckedChanged(object sender, EventArgs e)
-        {
-            UpdateWindowList();
-        }
-
-        private void SearchBox_TextChanged(object sender, EventArgs e)
-        {
-            // プレースホルダーテキストの場合は検索しない
-            if (searchBox.Text == "ウィンドウ名で検索...")
-            {
-                return;
-            }
-
-            UpdateWindowList();
-        }
-
+        /// <summary>
+        /// 現在選択されているウィンドウを選択
+        /// </summary>
         private void SelectCurrentWindow()
         {
             if (windowListView.SelectedItems.Count > 0)
             {
-                SelectedWindow = windowListView.SelectedItems[0].Tag as WindowSelector.WindowInfo;
+                SelectedWindow = windowListView.SelectedItems[0].Tag as WindowInfo;
                 this.DialogResult = DialogResult.OK;
                 this.Close();
             }
+        }
+
+        /// <summary>
+        /// リソースの解放
+        /// </summary>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // サムネイル画像の解放
+                if (thumbnailImageList != null)
+                {
+                    foreach (Image img in thumbnailImageList.Images)
+                    {
+                        img.Dispose();
+                    }
+                    thumbnailImageList.Dispose();
+                }
+            }
+
+            base.Dispose(disposing);
         }
     }
 }

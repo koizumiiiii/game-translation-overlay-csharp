@@ -22,21 +22,31 @@ namespace GameTranslationOverlay.Core.Translation.Services
         {
             this.baseUrl = baseUrl;
             this.httpClient = new HttpClient();
-            this.httpClient.Timeout = TimeSpan.FromSeconds(10);
+            this.httpClient.Timeout = TimeSpan.FromSeconds(30);
         }
 
         public async Task InitializeAsync()
         {
             try
             {
-                // サーバー接続確認
-                var response = await httpClient.GetAsync($"{baseUrl}/languages");
+                // より簡単なエンドポイントでテスト
+                var response = await httpClient.GetAsync($"{baseUrl}/");
+
                 if (response.IsSuccessStatusCode)
                 {
-                    var content = await response.Content.ReadAsStringAsync();
-                    supportedLanguages = JsonConvert.DeserializeObject<List<LanguageInfo>>(content);
-                    isInitialized = true;
-                    Debug.WriteLine("LibreTranslate server connected successfully");
+                    // 2回目の呼び出しでlanguagesをチェック
+                    var langResponse = await httpClient.GetAsync($"{baseUrl}/languages");
+                    if (langResponse.IsSuccessStatusCode)
+                    {
+                        var content = await langResponse.Content.ReadAsStringAsync();
+                        supportedLanguages = JsonConvert.DeserializeObject<List<LanguageInfo>>(content);
+                        isInitialized = true;
+                        Debug.WriteLine("LibreTranslate server connected successfully");
+                    }
+                    else
+                    {
+                        throw new Exception($"languages APIにアクセスできません。ステータスコード: {langResponse.StatusCode}");
+                    }
                 }
                 else
                 {
@@ -54,8 +64,7 @@ namespace GameTranslationOverlay.Core.Translation.Services
         {
             if (!isInitialized)
             {
-                Debug.WriteLine("Warning: Translation engine not initialized");
-                throw new Exception("翻訳エンジンが初期化されていません。");
+                return "LibreTranslateサーバーが初期化されていません。翻訳機能は現在使用できません。";
             }
 
             if (string.IsNullOrWhiteSpace(text))
