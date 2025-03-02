@@ -3,14 +3,16 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
-using GameTranslationOverlay.Core.OCR;
-using GameTranslationOverlay.Core.UI;
-using GameTranslationOverlay.Forms;
 using System.Threading.Tasks;
 using System.Linq;
 using System.IO;
+using GameTranslationOverlay.Core.OCR;
+using GameTranslationOverlay.Core.UI;
+using GameTranslationOverlay.Forms;
 using GameTranslationOverlay.Utils;
 using GameTranslationOverlay.Core.Models;
+using GameTranslationOverlay.Core.Translation.Services;
+using GameTranslationOverlay.Core.Translation.Interfaces;
 
 namespace GameTranslationOverlay
 {
@@ -23,6 +25,9 @@ namespace GameTranslationOverlay
         private Button _selectWindowButton;
         private Button _startTranslationButton;
         private Button _toggleTextDetectionButton;
+        private ComboBox _targetLanguageComboBox;
+        private CheckBox _useAITranslationCheckBox;
+        private Label _tokenCountLabel;
         private MenuStrip _menuStrip;
         private Label _hotkeyInfoLabel;
         private Label _statusLabel;
@@ -30,6 +35,12 @@ namespace GameTranslationOverlay
         private TesseractOcrEngine _ocrEngine;
         private GameTranslationOverlay.Core.Models.WindowInfo _selectedWindow;
         private Timer _checkWindowTimer;
+
+        // 翻訳関連
+        private TranslationManager _translationManager;
+        private LibreTranslateEngine _libreTranslateEngine;
+        private AITranslationEngine _aiTranslationEngine;
+        private string _openAiApiKey = ""; // 実際のAPIキーを設定
 
         private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
         private const uint SWP_NOMOVE = 0x0002;
@@ -118,13 +129,16 @@ namespace GameTranslationOverlay
             };
             _checkWindowTimer.Tick += CheckWindowTimer_Tick;
 
+            // 翻訳関連のコントロールとサービスを初期化
+            InitializeTranslationControls();
+
             // サービスの初期化
             InitializeServices();
 
             // フォームのサイズを調整
             this.ClientSize = new Size(
                 Math.Max(_benchmarkButton.Right + 12, _hotkeyInfoLabel.Right + 12),
-                _benchmarkButton.Bottom + 12
+                Math.Max(_benchmarkButton.Bottom + 12, _tokenCountLabel.Bottom + 12)
             );
 
             // 常に最前面に表示
@@ -175,6 +189,223 @@ namespace GameTranslationOverlay
             Controls.Add(_menuStrip);
         }
 
+        private void InitializeTranslationControls()
+        {
+            // 言語選択コンボボックス
+            _targetLanguageComboBox = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Location = new Point(200, _statusLabel.Bottom + 12),
+                Width = 150,
+                Font = new Font("Yu Gothic UI", 9)
+            };
+
+            foreach (string langCode in LanguageManager.SupportedLanguages)
+            {
+                _targetLanguageComboBox.Items.Add(LanguageManager.LanguageNames[langCode]);
+            }
+
+            // 初期値を日本語に設定
+            _targetLanguageComboBox.SelectedIndex = Array.IndexOf(LanguageManager.SupportedLanguages, "ja");
+            _targetLanguageComboBox.SelectedIndexChanged += TargetLanguageComboBox_SelectedIndexChanged;
+            this.Controls.Add(_targetLanguageComboBox);
+
+            // AI翻訳切り替えチェックボックス
+            _useAITranslationCheckBox = new CheckBox
+            {
+                Text = "AI翻訳を使用",
+                Location = new Point(200, _targetLanguageComboBox.Bottom + 12),
+                AutoSize = true,
+                Font = new Font("Yu Gothic UI", 9)
+            };
+            _useAITranslationCheckBox.CheckedChanged += UseAITranslationCheckBox_CheckedChanged;
+            this.Controls.Add(_useAITranslationCheckBox);
+
+            // トークン残量表示ラベル
+            _tokenCountLabel = new Label
+            {
+                AutoSize = true,
+                ForeColor = Color.DarkGreen,
+                Font = new Font("Yu Gothic UI", 9),
+                Text = "残りトークン: 5000",
+                Location = new Point(200, _useAITranslationCheckBox.Bottom + 12),
+                Visible = false
+            };
+            this.Controls.Add(_tokenCountLabel);
+        }
+
+        private void InitializeTranslationServices()
+        {
+            try
+            {
+                // Libre Translate エンジンの初期化
+                _libreTranslateEngine = new LibreTranslateEngine("http://localhost:5000");
+
+                // AI翻訳エンジンの初期化（APIキーが設定されている場合のみ）
+                if (!string.IsNullOrEmpty(_openAiApiKey))
+                {
+                    _aiTranslationEngine = new AITranslationEngine(_openAiApiKey);
+                }
+
+                // 翻訳マネージャーの初期化
+                _translationManager = new TranslationManager(_libreTranslateEngine);
+                Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _translationManager.InitializeAsync();
+                        this.BeginInvoke(new Action(() =>
+                        {
+                            UpdateStatus("翻訳エンジン初期化完了");
+                        }));
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"Translation initialization error: {ex.Message}");
+                        this.BeginInvoke(new Action(() =>
+                        {
+                            UpdateStatus($"翻訳エンジン初期化エラー: {ex.Message}", true);
+                            MessageBox.Show(
+                                $"翻訳エンジン初期化エラー: {ex.Message}\n\nLibreTranslate サーバーが起動しているか確認してください。",
+                                "エラー",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Error
+                            );
+                        }));
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Translation services initialization error: {ex.Message}");
+                UpdateStatus($"翻訳サービス初期化エラー: {ex.Message}", true);
+            }
+        }
+
+        private void TargetLanguageComboBox_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            try
+            {
+                int selectedIndex = _targetLanguageComboBox.SelectedIndex;
+                if (selectedIndex >= 0 && selectedIndex < LanguageManager.SupportedLanguages.Length)
+                {
+                    string selectedLangCode = LanguageManager.SupportedLanguages[selectedIndex];
+                    _translationManager?.SetPreferredTargetLanguage(selectedLangCode);
+                    Debug.WriteLine($"Target language changed to: {selectedLangCode}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error setting target language: {ex.Message}");
+                MessageBox.Show(
+                    $"言語設定エラー: {ex.Message}",
+                    "エラー",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+        }
+
+        private void UseAITranslationCheckBox_CheckedChanged(object sender, EventArgs e)
+        {
+            try
+            {
+                bool useAI = _useAITranslationCheckBox.Checked;
+
+                if (useAI)
+                {
+                    if (_aiTranslationEngine == null)
+                    {
+                        // APIキーが設定されていない場合
+                        if (string.IsNullOrEmpty(_openAiApiKey))
+                        {
+                            MessageBox.Show(
+                                "AI翻訳を使用するにはAPIキーを設定する必要があります。",
+                                "設定エラー",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Warning
+                            );
+                            _useAITranslationCheckBox.Checked = false;
+                            return;
+                        }
+
+                        // AIエンジンの初期化
+                        _aiTranslationEngine = new AITranslationEngine(_openAiApiKey);
+                    }
+
+                    // AI翻訳エンジンに切り替え
+                    _translationManager.SetTranslationEngine(_aiTranslationEngine);
+                    _tokenCountLabel.Visible = true;
+                    _tokenCountLabel.Text = $"残りトークン: {_aiTranslationEngine.GetRemainingTokens()}";
+
+                    // 初期化
+                    Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await _translationManager.InitializeAsync();
+                            this.BeginInvoke(new Action(() =>
+                            {
+                                UpdateStatus("AI翻訳エンジン初期化完了");
+                            }));
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"AI Translation initialization error: {ex.Message}");
+                            this.BeginInvoke(new Action(() =>
+                            {
+                                UpdateStatus($"AI翻訳エンジン初期化エラー: {ex.Message}", true);
+                                _useAITranslationCheckBox.Checked = false;
+                                MessageBox.Show(
+                                    $"AI翻訳エンジン初期化エラー: {ex.Message}",
+                                    "エラー",
+                                    MessageBoxButtons.OK,
+                                    MessageBoxIcon.Error
+                                );
+                            }));
+                        }
+                    });
+                }
+                else
+                {
+                    // LibreTranslate エンジンに戻す
+                    _translationManager.SetTranslationEngine(_libreTranslateEngine);
+                    _tokenCountLabel.Visible = false;
+
+                    // 初期化
+                    Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await _translationManager.InitializeAsync();
+                            this.BeginInvoke(new Action(() =>
+                            {
+                                UpdateStatus("標準翻訳エンジン初期化完了");
+                            }));
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"Libre Translation initialization error: {ex.Message}");
+                            this.BeginInvoke(new Action(() =>
+                            {
+                                UpdateStatus($"標準翻訳エンジン初期化エラー: {ex.Message}", true);
+                            }));
+                        }
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error changing translation engine: {ex.Message}");
+                MessageBox.Show(
+                    $"翻訳エンジン切替エラー: {ex.Message}",
+                    "エラー",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+        }
+
         private async void InitializeServices()
         {
             Debug.WriteLine("InitializeServices: 開始");
@@ -188,7 +419,12 @@ namespace GameTranslationOverlay
                 await _ocrEngine.InitializeAsync();
                 Debug.WriteLine("InitializeServices: OCRエンジン初期化完了");
 
-                _overlayForm = new OverlayForm(_ocrEngine);
+                // 翻訳サービスの初期化
+                InitializeTranslationServices();
+                Debug.WriteLine("InitializeServices: 翻訳サービス初期化開始");
+
+                // オーバーレイフォームの作成時にTranslationManagerを渡す
+                _overlayForm = new OverlayForm(_ocrEngine, _translationManager);
                 _overlayForm.Show();
                 Debug.WriteLine("InitializeServices: オーバーレイフォーム作成完了");
 
@@ -400,6 +636,12 @@ namespace GameTranslationOverlay
                     _overlayForm.Dispose();
                     Debug.WriteLine("OnFormClosing: オーバーレイフォームを破棄");
                 }
+
+                // 翻訳エンジンのクリーンアップ（IDisposableが実装されていない場合にはこの行を削除）
+                _aiTranslationEngine = null;
+                _libreTranslateEngine = null;
+                _translationManager = null;
+                Debug.WriteLine("OnFormClosing: 翻訳関連リソースをクリーンアップ");
             }
             catch (Exception ex)
             {

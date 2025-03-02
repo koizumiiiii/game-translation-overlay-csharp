@@ -19,11 +19,7 @@ namespace GameTranslationOverlay.Forms
     {
         // 領域選択関連
         private bool isRegionSelectMode = false;
-        private Point startPoint;
-        private Rectangle selectionRectangle;
-        private bool isMouseDown = false;
         private Pen selectionPen = new Pen(Color.Red, 2);
-        private Timer textChangeDetectionTimer;
         private string lastRecognizedText = string.Empty;
         private const int TEXT_CHECK_INTERVAL = 1000; // テキスト変更チェック間隔（ミリ秒）
 
@@ -31,7 +27,7 @@ namespace GameTranslationOverlay.Forms
         private IOcrEngine _ocrEngine;
 
         // 翻訳関連
-        private ITranslationEngine _translationEngine;
+        private TranslationManager _translationManager;
 
         // 翻訳表示用ウィンドウ
         private TranslationBox _translationBox = null;
@@ -83,7 +79,7 @@ namespace GameTranslationOverlay.Forms
         /// <summary>
         /// コンストラクタ
         /// </summary>
-        public OverlayForm(IOcrEngine ocrEngine)
+        public OverlayForm(IOcrEngine ocrEngine, TranslationManager translationManager)
         {
             try
             {
@@ -96,7 +92,10 @@ namespace GameTranslationOverlay.Forms
             }
 
             // 受け取ったOCRエンジンをフィールドに保存
-            this._ocrEngine = ocrEngine;
+            this._ocrEngine = ocrEngine ?? throw new ArgumentNullException(nameof(ocrEngine));
+
+            // 翻訳マネージャーを設定
+            this._translationManager = translationManager ?? throw new ArgumentNullException(nameof(translationManager));
 
             // フォームの初期設定
             this.FormBorderStyle = FormBorderStyle.None;
@@ -109,38 +108,26 @@ namespace GameTranslationOverlay.Forms
             // クリックスルーを有効化（デフォルト）
             SetClickThrough(true);
 
-            // 翻訳エンジンの初期化
-            try
-            {
-                _translationEngine = new LibreTranslateEngine();
-                Debug.WriteLine("Translation engine created successfully");
-
-                // 非同期で初期化を開始し、完了を待たない
-                Task.Run(async () =>
-                {
-                    try
-                    {
-                        await ((LibreTranslateEngine)_translationEngine).InitializeAsync();
-                        Debug.WriteLine("Translation engine initialized successfully");
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"Error in async initialization: {ex.Message}");
-                    }
-                });
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error creating translation engine: {ex.Message}");
-            }
-
             // ホットキーの登録
             RegisterHotkeys();
 
             // テキスト検出機能の初期化
             InitializeTextDetection();
 
-            Debug.WriteLine("Translation box initialized in constructor");
+            // 翻訳ボックスの初期化
+            InitializeTranslationBox();
+
+            Debug.WriteLine("OverlayForm: コンストラクタ完了");
+        }
+
+        /// <summary>
+        /// 翻訳ボックスの初期化
+        /// </summary>
+        private void InitializeTranslationBox()
+        {
+            _translationBox = new TranslationBox();
+            _translationBox.SetTranslationManager(_translationManager);
+            Debug.WriteLine("Translation box initialized");
         }
 
         // フォールバック初期化（デザイナーファイルが機能しない場合用）
@@ -248,6 +235,7 @@ namespace GameTranslationOverlay.Forms
             if (_translationBox == null || _translationBox.IsDisposed)
             {
                 _translationBox = new TranslationBox();
+                _translationBox.SetTranslationManager(_translationManager);
                 Debug.WriteLine("New translation box created");
             }
 
@@ -515,26 +503,31 @@ namespace GameTranslationOverlay.Forms
 
                 // 翻訳処理
                 string translatedText = string.Empty;
-                if (_translationEngine != null)
-                {
-                    Debug.WriteLine("翻訳リクエスト送信");
-                    Debug.WriteLine($"Translating: '{region.Text.Substring(0, Math.Min(20, region.Text.Length))}...' from ja to en");
 
-                    try
+                if (_translationBox != null && !_translationBox.IsDisposed)
+                {
+                    bool useAutoDetect = _translationBox.IsUsingAutoDetect();
+                    string targetLang = _translationBox.GetSelectedTargetLanguage();
+
+                    if (useAutoDetect)
                     {
-                        translatedText = await _translationEngine.TranslateAsync(region.Text, "ja", "en");
-                        Debug.WriteLine($"翻訳結果受信: '{translatedText}'");
+                        // 言語自動検出を使用
+                        translatedText = await _translationManager.TranslateWithAutoDetectAsync(region.Text);
+                        Debug.WriteLine("言語自動検出を使用して翻訳しました");
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        translatedText = $"翻訳エラー: {ex.Message}";
-                        Debug.WriteLine($"翻訳エラー: {ex.Message}");
+                        // 言語を明示的に指定
+                        string sourceLang = LanguageManager.DetectLanguage(region.Text);
+                        translatedText = await _translationManager.TranslateAsync(region.Text, sourceLang, targetLang);
+                        Debug.WriteLine($"{sourceLang}から{targetLang}へ翻訳しました");
                     }
                 }
                 else
                 {
-                    translatedText = $"翻訳エンジンが利用できません。テキスト: {region.Text}";
-                    Debug.WriteLine("翻訳エンジンが利用できません");
+                    // _translationBoxが利用できない場合
+                    Debug.WriteLine("翻訳ボックスが利用できないため、デフォルトの翻訳設定を使用します");
+                    translatedText = await _translationManager.TranslateWithAutoDetectAsync(region.Text);
                 }
 
                 // 最後に翻訳したテキストを保存
@@ -550,6 +543,8 @@ namespace GameTranslationOverlay.Forms
             catch (Exception ex)
             {
                 Debug.WriteLine($"翻訳処理中にエラーが発生しました: {ex.Message}");
+                // ユーザーフレンドリーなエラーメッセージを表示
+                ShowTranslation($"翻訳エラー: {ex.Message}");
             }
         }
 
@@ -661,6 +656,15 @@ namespace GameTranslationOverlay.Forms
                 _autoHideTimer.Stop();
                 _autoHideTimer.Dispose();
                 _autoHideTimer = null;
+            }
+
+            // 翻訳ボックスの破棄
+            if (_translationBox != null && !_translationBox.IsDisposed)
+            {
+                _translationBox.Close();
+                _translationBox.Dispose();
+                _translationBox = null;
+                Debug.WriteLine("翻訳ボックスを破棄しました");
             }
 
             // ホットキーの解除

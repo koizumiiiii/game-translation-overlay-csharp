@@ -5,7 +5,8 @@
         /// <summary>
         /// Required designer variable.
         /// </summary>
-        private System.ComponentModel.IContainer components = null;
+        // 未使用の components フィールドを削除
+        // private System.ComponentModel.IContainer components = null;
 
         /// <summary>
         /// Clean up any resources being used.

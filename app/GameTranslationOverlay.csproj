@@ -77,9 +77,12 @@
     <Compile Include="Core\Translation\Exceptions\TranslationException.cs" />
     <Compile Include="Core\Translation\Interfaces\ITranslationEngine.cs" />
     <Compile Include="Core\Translation\Models\TranslationModels.cs" />
+    <Compile Include="Core\Translation\Services\AITranslationEngine.cs" />
+    <Compile Include="Core\Translation\Services\LanguageManager.cs" />
     <Compile Include="Core\Translation\Services\LibreTranslateEngine.cs" />
     <Compile Include="Core\Translation\Services\TranslationCache.cs" />
     <Compile Include="Core\Translation\Services\TranslationManager.cs" />
+    <Compile Include="Core\Translation\Utils\ErrorHandlingExtensions.cs" />
     <Compile Include="Core\UI\WindowSelector.cs" />
     <Compile Include="Core\Utils\ScreenCapture.cs" />
     <Compile Include="Core\Utils\TextDetectionUtil.cs" />

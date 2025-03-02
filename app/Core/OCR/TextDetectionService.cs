@@ -17,7 +17,8 @@ namespace GameTranslationOverlay.Core.OCR
         private Timer detectionTimer;
         private List<TextRegion> detectedRegions = new List<TextRegion>();
         private IntPtr targetWindowHandle;
-        private bool disposed = false;
+        // 未使用の disposed フィールドを削除
+        // private bool disposed = false;
         private bool isRunning = false;
         private int noRegionsDetectedCount = 0;
         private const int NO_REGIONS_THRESHOLD = 3;
