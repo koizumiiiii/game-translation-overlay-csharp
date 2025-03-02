@@ -13,6 +13,8 @@ using GameTranslationOverlay.Utils;
 using GameTranslationOverlay.Core.Models;
 using GameTranslationOverlay.Core.Translation.Services;
 using GameTranslationOverlay.Core.Translation.Interfaces;
+using GameTranslationOverlay.Core.Utils;
+using Windows.ApplicationModel.Chat;
 
 namespace GameTranslationOverlay
 {
@@ -32,7 +34,19 @@ namespace GameTranslationOverlay
         private Label _hotkeyInfoLabel;
         private Label _statusLabel;
         private OverlayForm _overlayForm;
-        private TesseractOcrEngine _ocrEngine;
+
+        // OCR関連（更新）
+        //private TesseractOcrEngine _ocrEngine;
+        private OcrManager _ocrManager;
+
+        // OCR設定UI要素を追加
+        private GroupBox _ocrSettingsGroup;
+        private ComboBox _ocrEngineComboBox;
+        private CheckBox _useFallbackCheckBox;
+        private CheckBox _usePreprocessingCheckBox;
+        private TrackBar _confidenceTrackBar;
+        private Label _confidenceLabel;
+
         private GameTranslationOverlay.Core.Models.WindowInfo _selectedWindow;
         private Timer _checkWindowTimer;
 
@@ -118,6 +132,9 @@ namespace GameTranslationOverlay
             _benchmarkButton.Click += async (sender, e) => await RunBenchmark();
             this.Controls.Add(_benchmarkButton);
 
+            // OCR設定グループを初期化
+            InitializeOcrSettings();
+
             // メニューストリップの初期化
             InitializeMenu();
 
@@ -137,7 +154,7 @@ namespace GameTranslationOverlay
 
             // フォームのサイズを調整
             this.ClientSize = new Size(
-                Math.Max(_benchmarkButton.Right + 12, _hotkeyInfoLabel.Right + 12),
+                Math.Max(_ocrSettingsGroup.Right + 12, _hotkeyInfoLabel.Right + 12),
                 Math.Max(_benchmarkButton.Bottom + 12, _tokenCountLabel.Bottom + 12)
             );
 
@@ -145,6 +162,123 @@ namespace GameTranslationOverlay
             SetWindowPos(this.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 
             Debug.WriteLine("MainForm: コンストラクタ完了");
+        }
+
+        /// <summary>
+        /// OCR設定UIの初期化
+        /// </summary>
+        private void InitializeOcrSettings()
+        {
+            // OCR設定グループ
+            _ocrSettingsGroup = new GroupBox
+            {
+                Text = "OCR設定",
+                Location = new Point(200, _benchmarkButton.Bottom + 20),
+                Size = new Size(200, 160)
+            };
+
+            // OCRエンジン選択
+            Label engineLabel = new Label
+            {
+                Text = "OCRエンジン:",
+                Location = new Point(10, 25),
+                AutoSize = true
+            };
+
+            _ocrEngineComboBox = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Location = new Point(120, 22),
+                Size = new Size(70, 21)
+            };
+            _ocrEngineComboBox.Items.AddRange(new object[] { "Auto", "PaddleOCR", "Tesseract" });
+            _ocrEngineComboBox.SelectedIndex = 0;
+            _ocrEngineComboBox.SelectedIndexChanged += (s, e) =>
+            {
+                if (_ocrManager != null)
+                {
+                    _ocrManager.SetOcrEngine(_ocrEngineComboBox.SelectedItem.ToString());
+                }
+            };
+
+            // フォールバックチェックボックス
+            _useFallbackCheckBox = new CheckBox
+            {
+                Text = "フォールバック使用",
+                Location = new Point(10, 50),
+                AutoSize = true,
+                Checked = true
+            };
+            _useFallbackCheckBox.CheckedChanged += (s, e) =>
+            {
+                if (_ocrManager != null)
+                {
+                    _ocrManager.SetUseFallback(_useFallbackCheckBox.Checked);
+                }
+            };
+
+            // 前処理チェックボックス
+            _usePreprocessingCheckBox = new CheckBox
+            {
+                Text = "画像前処理を適用",
+                Location = new Point(10, 75),
+                AutoSize = true,
+                Checked = true
+            };
+            _usePreprocessingCheckBox.CheckedChanged += (s, e) =>
+            {
+                if (_ocrManager != null)
+                {
+                    _ocrManager.EnablePreprocessing(_usePreprocessingCheckBox.Checked);
+                }
+            };
+
+            // 信頼度スライダー
+            Label thresholdLabel = new Label
+            {
+                Text = "信頼度閾値:",
+                Location = new Point(10, 100),
+                AutoSize = true
+            };
+
+            _confidenceTrackBar = new TrackBar
+            {
+                Location = new Point(10, 120),
+                Size = new Size(140, 45),
+                Minimum = 0,
+                Maximum = 100,
+                Value = 60, // 0.6の信頼度
+                TickFrequency = 10
+            };
+
+            _confidenceLabel = new Label
+            {
+                Text = "0.60",
+                Location = new Point(160, 120),
+                AutoSize = true
+            };
+
+            _confidenceTrackBar.ValueChanged += (s, e) =>
+            {
+                float value = _confidenceTrackBar.Value / 100.0f;
+                _confidenceLabel.Text = value.ToString("F2");
+
+                if (_ocrManager != null)
+                {
+                    _ocrManager.SetConfidenceThreshold(value);
+                }
+            };
+
+            // コントロールをグループに追加
+            _ocrSettingsGroup.Controls.Add(engineLabel);
+            _ocrSettingsGroup.Controls.Add(_ocrEngineComboBox);
+            _ocrSettingsGroup.Controls.Add(_useFallbackCheckBox);
+            _ocrSettingsGroup.Controls.Add(_usePreprocessingCheckBox);
+            _ocrSettingsGroup.Controls.Add(thresholdLabel);
+            _ocrSettingsGroup.Controls.Add(_confidenceTrackBar);
+            _ocrSettingsGroup.Controls.Add(_confidenceLabel);
+
+            this.Controls.Add(_ocrSettingsGroup);
         }
 
         private void InitializeComponent()
@@ -413,18 +547,20 @@ namespace GameTranslationOverlay
             {
                 UpdateStatus("初期化中...");
 
-                _ocrEngine = new TesseractOcrEngine();
-                Debug.WriteLine("InitializeServices: OCRエンジン作成");
+                // OCRマネージャーの初期化（複数のOCRエンジンを管理）
+                _ocrManager = new OcrManager();
+                await _ocrManager.InitializeAsync();
+                Debug.WriteLine("InitializeServices: OCRマネージャー初期化完了");
 
-                await _ocrEngine.InitializeAsync();
-                Debug.WriteLine("InitializeServices: OCRエンジン初期化完了");
+                // OCR設定UIの初期状態を設定
+                UpdateOcrSettings();
 
                 // 翻訳サービスの初期化
                 InitializeTranslationServices();
                 Debug.WriteLine("InitializeServices: 翻訳サービス初期化開始");
 
-                // オーバーレイフォームの作成時にTranslationManagerを渡す
-                _overlayForm = new OverlayForm(_ocrEngine, _translationManager);
+                // オーバーレイフォームの作成時にOCRマネージャーとTranslationManagerを渡す
+                _overlayForm = new OverlayForm(_ocrManager, _translationManager);
                 _overlayForm.Show();
                 Debug.WriteLine("InitializeServices: オーバーレイフォーム作成完了");
 
@@ -442,6 +578,26 @@ namespace GameTranslationOverlay
                 );
                 Application.Exit();
             }
+        }
+
+        /// <summary>
+        /// OCR設定UIを現在の状態に更新
+        /// </summary>
+        private void UpdateOcrSettings()
+        {
+            if (_ocrManager == null)
+                return;
+
+            // エンジン選択コンボボックスの更新
+            string primaryEngine = _ocrManager.GetPrimaryEngineName();
+            int index = 0; // Auto
+
+            if (primaryEngine == "PaddleOCR")
+                index = 1;
+            else if (primaryEngine == "Tesseract")
+                index = 2;
+
+            _ocrEngineComboBox.SelectedIndex = index;
         }
 
         private void UpdateStatus(string message, bool isError = false)
@@ -556,38 +712,54 @@ namespace GameTranslationOverlay
                     "item_description"
                 };
 
-                foreach (var scenario in testScenarios)
+                // 各前処理オプションのテスト
+                var preprocessingOptions = new PreprocessingOptions[]
                 {
-                    Debug.WriteLine($"\nTesting scenario: {scenario}");
-                    var imagePath = Path.Combine("Core", "OCR", "Resources", "TestImages", $"{scenario}.png");
+                    null, // デフォルト（前処理なし）
+                    ImagePreprocessor.JapaneseTextPreset,
+                    ImagePreprocessor.EnglishTextPreset,
+                    ImagePreprocessor.GameTextLightPreset
+                };
 
-                    try
+                string[] optionNames = { "Default", "Japanese Preset", "English Preset", "Light Preset" };
+
+                // 各プリセットとシナリオの組み合わせをテスト
+                for (int i = 0; i < preprocessingOptions.Length; i++)
+                {
+                    Debug.WriteLine($"\n--- Testing with {optionNames[i]} ---");
+
+                    if (_ocrManager != null)
                     {
-                        using (var image = new Bitmap(imagePath))
+                        // 前処理設定を適用
+                        _ocrManager.SetPreprocessingOptions(preprocessingOptions[i]);
+                        _ocrManager.EnablePreprocessing(preprocessingOptions[i] != null);
+                    }
+
+                    foreach (var scenario in testScenarios)
+                    {
+                        Debug.WriteLine($"\nTesting scenario: {scenario}");
+                        var imagePath = Path.Combine("Core", "OCR", "Resources", "TestImages", $"{scenario}.png");
+
+                        try
                         {
-                            var region = new Rectangle(0, 0, image.Width, image.Height);
-                            var results = await OcrTest.RunTests(region);
-
-                            var paddleResults = results.Where(r => r.EngineName == "PaddleOCR");
-                            foreach (var result in paddleResults)
+                            using (var image = new Bitmap(imagePath))
                             {
-                                Debug.WriteLine($"PaddleOCR - Time: {result.ProcessingTime}ms, Accuracy: {result.Accuracy:P2}");
-                                Debug.WriteLine($"Recognized Text:\n{result.RecognizedText}\n");
+                                // OCRマネージャーを使用してテキスト領域を検出
+                                var regions = await _ocrManager.DetectTextRegionsAsync(image);
 
-                                if (result.AdditionalInfo?.Any() == true)
+                                Debug.WriteLine($"Detected {regions.Count} text regions");
+                                foreach (var region in regions)
                                 {
-                                    foreach (var info in result.AdditionalInfo)
-                                    {
-                                        Debug.WriteLine($"{info.Key}: {info.Value}");
-                                    }
+                                    Debug.WriteLine($"Region: {region.Bounds}, Confidence: {region.Confidence:F2}");
+                                    Debug.WriteLine($"Text: {region.Text}");
                                 }
                             }
                         }
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"Error testing scenario {scenario}: {ex.Message}");
-                        continue;
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"Error testing scenario {scenario}: {ex.Message}");
+                            continue;
+                        }
                     }
                 }
 
@@ -625,10 +797,10 @@ namespace GameTranslationOverlay
                     _checkWindowTimer.Dispose();
                 }
 
-                if (_ocrEngine != null)
+                if (_ocrManager != null)
                 {
-                    _ocrEngine.Dispose();
-                    Debug.WriteLine("OnFormClosing: OCRエンジンを破棄");
+                    _ocrManager.Dispose();
+                    Debug.WriteLine("OnFormClosing: OCRマネージャーを破棄");
                 }
 
                 if (_overlayForm != null)

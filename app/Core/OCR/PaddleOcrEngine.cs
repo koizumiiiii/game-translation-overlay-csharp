@@ -14,15 +14,43 @@ namespace GameTranslationOverlay.Core.OCR
         private OCRModelConfig _modelConfig;
         private bool _isDisposed = false;
 
+        // OCRパラメータ
+        private PreprocessingOptions _preprocessingOptions;
+        private bool _usePreprocessing = true;
+
+        // エラー状態の追跡
+        private int _consecutiveErrors = 0;
+        private const int ERROR_THRESHOLD = 5;
+
+        public PaddleOcrEngine(PreprocessingOptions preprocessingOptions = null)
+        {
+            _preprocessingOptions = preprocessingOptions ?? ImagePreprocessor.JapaneseTextPreset;
+        }
+
         public async Task InitializeAsync()
         {
             await Task.Run(() =>
             {
                 try
                 {
+                    // OCRモデル設定を最適化
                     _modelConfig = new OCRModelConfig();
+
+                    // 精度向上のためのパラメータ設定
+                    _modelConfig.paddleEnableLiteFP16 = true; // 高速化
+                    _modelConfig.cls = true; // テキスト向き自動検出
+                    _modelConfig.rec = true; // テキスト認識
+                    _modelConfig.det = true; // テキスト検出
+
+                    // モデルパスを指定（環境に応じて変更が必要かもしれません）
+                    // _modelConfig.modelPathDict["det"] = "path_to_detection_model";
+                    // _modelConfig.modelPathDict["cls"] = "path_to_classification_model";
+                    // _modelConfig.modelPathDict["rec"] = "path_to_recognition_model";
+
+                    // エンジン初期化
                     _paddleOcr = new PaddleOCREngine(_modelConfig);
-                    Debug.WriteLine("PaddleOCR engine initialized successfully");
+
+                    Debug.WriteLine("PaddleOCR engine initialized successfully with optimized parameters");
                 }
                 catch (Exception ex)
                 {
@@ -51,17 +79,78 @@ namespace GameTranslationOverlay.Core.OCR
                             return string.Empty;
                         }
 
-                        OCRResult result = _paddleOcr.DetectText(screenshot);
-                        if (result != null && result.Text != null)
+                        // 画像前処理を適用（オプション）
+                        Bitmap processedImage = _usePreprocessing
+                            ? ImagePreprocessor.Preprocess(screenshot, _preprocessingOptions)
+                            : screenshot;
+
+                        try
                         {
-                            return result.Text.Trim();
+                            // 検出と認識を実行
+                            OCRResult result = _paddleOcr.DetectText(processedImage);
+
+                            // 連続エラーカウンタをリセット
+                            _consecutiveErrors = 0;
+
+                            // 認識されたテキストを返す
+                            if (result != null && !string.IsNullOrEmpty(result.Text))
+                            {
+                                return result.Text.Trim();
+                            }
+                            return string.Empty;
                         }
-                        return string.Empty;
+                        catch (Exception ex)
+                        {
+                            _consecutiveErrors++;
+
+                            // 特定のエラーパターンに対する処理
+                            if (ex.Message.Contains("boxClipToRectangle") ||
+                                ex.Message.Contains("pixScanForForeground"))
+                            {
+                                // 境界エラーの場合は、画像をパディングして再試行
+                                Debug.WriteLine($"Boundary error detected: {ex.Message}, retrying with padding");
+
+                                try
+                                {
+                                    // パディングを追加して再処理
+                                    using (var paddedImage = AddSafePadding(processedImage))
+                                    {
+                                        OCRResult retryResult = _paddleOcr.DetectText(paddedImage);
+                                        if (retryResult != null && !string.IsNullOrEmpty(retryResult.Text))
+                                        {
+                                            return retryResult.Text.Trim();
+                                        }
+                                    }
+                                }
+                                catch (Exception retryEx)
+                                {
+                                    Debug.WriteLine($"Retry also failed: {retryEx.Message}");
+                                }
+                            }
+
+                            // 連続エラーが閾値を超えたら前処理を無効化（一時的な対応策）
+                            if (_consecutiveErrors >= ERROR_THRESHOLD && _usePreprocessing)
+                            {
+                                _usePreprocessing = false;
+                                Debug.WriteLine("Too many consecutive errors, disabling preprocessing temporarily");
+                            }
+
+                            Debug.WriteLine($"Error in PaddleOCR recognition: {ex.Message}");
+                            return $"OCR Error: {ex.Message}";
+                        }
+                        finally
+                        {
+                            // 前処理画像が元画像と異なる場合のみ破棄
+                            if (_usePreprocessing && processedImage != screenshot)
+                            {
+                                processedImage.Dispose();
+                            }
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"Error in PaddleOCR recognition: {ex.Message}");
+                    Debug.WriteLine($"Error capturing screenshot: {ex.Message}");
                     return $"OCR Error: {ex.Message}";
                 }
             });
@@ -88,142 +177,281 @@ namespace GameTranslationOverlay.Core.OCR
 
                 try
                 {
-                    // PaddleOCRを使用してテキスト領域を検出
-                    OCRResult result = _paddleOcr.DetectText(image);
+                    // 前処理適用（オプション）
+                    Bitmap processedImage = _usePreprocessing
+                        ? ImagePreprocessor.Preprocess(image, _preprocessingOptions)
+                        : image;
 
-                    // APIの変更に対応するためにリフレクションを使用
-                    if (result != null && result.TextBlocks != null && result.TextBlocks.Count > 0)
+                    try
                     {
-                        // 最初のアイテムでプロパティを確認（デバッグ用）
-                        var firstBlock = result.TextBlocks[0];
-                        var props = firstBlock.GetType().GetProperties();
+                        // PaddleOCRを使用してテキスト領域を検出
+                        OCRResult result = _paddleOcr.DetectText(processedImage);
 
-                        // デバッグ出力
-                        Debug.WriteLine("TextBlock properties:");
-                        foreach (var prop in props)
-                        {
-                            Debug.WriteLine($"Property: {prop.Name}, Type: {prop.PropertyType.Name}");
-                            try
-                            {
-                                var value = prop.GetValue(firstBlock);
-                                if (value != null)
-                                {
-                                    Debug.WriteLine($"  Value: {value}");
-                                }
-                            }
-                            catch { }
-                        }
+                        // 連続エラーカウンタをリセット
+                        _consecutiveErrors = 0;
 
-                        // 各テキストブロックをTextRegionオブジェクトに変換
-                        foreach (var textBlock in result.TextBlocks)
-                        {
-                            try
-                            {
-                                // 座標情報を取得するための変数
-                                int x = 0, y = 0, width = 0, height = 0;
-                                float confidence = 0.0f;
-                                string text = "";
-
-                                // リフレクションを使用して様々なプロパティパターンを試す
-                                // BoxやRect、直接座標プロパティなど
-
-                                // テキスト
-                                var textProp = textBlock.GetType().GetProperty("Text");
-                                if (textProp != null)
-                                {
-                                    text = (string)textProp.GetValue(textBlock) ?? "";
-                                }
-
-                                // 信頼度
-                                var scoreProp = textBlock.GetType().GetProperty("Score") ??
-                                               textBlock.GetType().GetProperty("Confidence");
-                                if (scoreProp != null)
-                                {
-                                    confidence = Convert.ToSingle(scoreProp.GetValue(textBlock));
-                                }
-
-                                // Box/Rectオブジェクトとしてのプロパティ
-                                var boxProp = textBlock.GetType().GetProperty("Box") ??
-                                             textBlock.GetType().GetProperty("Rect") ??
-                                             textBlock.GetType().GetProperty("Rectangle");
-
-                                if (boxProp != null)
-                                {
-                                    var box = boxProp.GetValue(textBlock);
-                                    if (box != null)
-                                    {
-                                        var boxType = box.GetType();
-
-                                        // Boxの各プロパティを取得
-                                        var xProp = boxType.GetProperty("X");
-                                        var yProp = boxType.GetProperty("Y");
-                                        var wProp = boxType.GetProperty("Width");
-                                        var hProp = boxType.GetProperty("Height");
-
-                                        if (xProp != null && yProp != null && wProp != null && hProp != null)
-                                        {
-                                            x = Convert.ToInt32(xProp.GetValue(box));
-                                            y = Convert.ToInt32(yProp.GetValue(box));
-                                            width = Convert.ToInt32(wProp.GetValue(box));
-                                            height = Convert.ToInt32(hProp.GetValue(box));
-                                        }
-                                    }
-                                }
-                                else
-                                {
-                                    // 直接座標プロパティを取得
-                                    var xProp = textBlock.GetType().GetProperty("X");
-                                    var yProp = textBlock.GetType().GetProperty("Y");
-                                    var wProp = textBlock.GetType().GetProperty("Width");
-                                    var hProp = textBlock.GetType().GetProperty("Height");
-
-                                    if (xProp != null && yProp != null && wProp != null && hProp != null)
-                                    {
-                                        x = Convert.ToInt32(xProp.GetValue(textBlock));
-                                        y = Convert.ToInt32(yProp.GetValue(textBlock));
-                                        width = Convert.ToInt32(wProp.GetValue(textBlock));
-                                        height = Convert.ToInt32(hProp.GetValue(textBlock));
-                                    }
-                                }
-
-                                // 有効な座標が取得できた場合のみTextRegionを作成
-                                if (width > 0 && height > 0)
-                                {
-                                    regions.Add(new TextRegion(
-                                        new Rectangle(x, y, width, height),
-                                        text,
-                                        confidence
-                                    ));
-                                }
-                                else
-                                {
-                                    Debug.WriteLine("Warning: Failed to extract valid rectangle coordinates from TextBlock");
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                Debug.WriteLine($"Error processing text block: {ex.Message}");
-                            }
-                        }
+                        // 結果の処理
+                        ProcessOcrResult(result, regions);
                     }
-                    // TextBlocksがない場合やAPIが変わっている場合の代替手段
-                    else if (!string.IsNullOrEmpty(result?.Text))
+                    catch (Exception ex)
                     {
-                        // 全体を1つの領域として扱う
-                        regions.Add(new TextRegion(
-                            new Rectangle(0, 0, image.Width, image.Height),
-                            result.Text,
-                            1.0f
-                        ));
+                        _consecutiveErrors++;
+
+                        // 特定のエラーパターンに対する処理
+                        if (ex.Message.Contains("boxClipToRectangle") ||
+                            ex.Message.Contains("pixScanForForeground"))
+                        {
+                            Debug.WriteLine($"Boundary error detected: {ex.Message}, retrying with padding");
+
+                            try
+                            {
+                                // パディングを追加して再処理
+                                using (var paddedImage = AddSafePadding(processedImage))
+                                {
+                                    OCRResult retryResult = _paddleOcr.DetectText(paddedImage);
+                                    ProcessOcrResult(retryResult, regions, 10); // パディング分のオフセット補正
+                                }
+                            }
+                            catch (Exception retryEx)
+                            {
+                                Debug.WriteLine($"Retry also failed: {retryEx.Message}");
+                            }
+                        }
+
+                        // 連続エラーが閾値を超えたら前処理を無効化
+                        if (_consecutiveErrors >= ERROR_THRESHOLD && _usePreprocessing)
+                        {
+                            _usePreprocessing = false;
+                            Debug.WriteLine("Too many consecutive errors, disabling preprocessing temporarily");
+                        }
+
+                        Debug.WriteLine($"Error detecting text regions: {ex.Message}");
+                    }
+                    finally
+                    {
+                        // 前処理画像が元画像と異なる場合のみ破棄
+                        if (_usePreprocessing && processedImage != image)
+                        {
+                            processedImage.Dispose();
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"Error detecting text regions: {ex.Message}");
+                    Debug.WriteLine($"Error in pre-processing: {ex.Message}");
                 }
 
                 return regions;
             });
+        }
+
+        /// <summary>
+        /// OCR結果を処理してTextRegionリストを作成
+        /// </summary>
+        private void ProcessOcrResult(OCRResult result, List<TextRegion> regions, int offsetCorrection = 0)
+        {
+            if (result == null || result.TextBlocks == null)
+                return;
+
+            try
+            {
+                foreach (var textBlock in result.TextBlocks)
+                {
+                    try
+                    {
+                        // リフレクションを使用せずに直接プロパティにアクセス
+                        // ※APIバージョンによって異なる場合があります
+                        Rectangle rect;
+                        float confidence;
+                        string text;
+
+                        // 最新のPaddleOCRSharpのプロパティ構造に合わせて調整
+                        // APIがさらに変更されている場合は適宜修正が必要
+                        try
+                        {
+                            // Direct property access attempt
+                            text = textBlock.Text;
+                            confidence = textBlock.Score;
+
+                            // さまざまなAPI形式に対応（プロパティ名の違いに備える）
+                            int x, y, width, height;
+
+                            // Attempt 1: Try to get Rect property
+                            if (textBlock.GetType().GetProperty("Rect") != null)
+                            {
+                                var rectObject = textBlock.GetType().GetProperty("Rect").GetValue(textBlock);
+                                x = (int)rectObject.GetType().GetProperty("X").GetValue(rectObject);
+                                y = (int)rectObject.GetType().GetProperty("Y").GetValue(rectObject);
+                                width = (int)rectObject.GetType().GetProperty("Width").GetValue(rectObject);
+                                height = (int)rectObject.GetType().GetProperty("Height").GetValue(rectObject);
+                            }
+                            // Attempt 2: Try to get Box property
+                            else if (textBlock.GetType().GetProperty("Box") != null)
+                            {
+                                var boxObject = textBlock.GetType().GetProperty("Box").GetValue(textBlock);
+                                x = (int)boxObject.GetType().GetProperty("X").GetValue(boxObject);
+                                y = (int)boxObject.GetType().GetProperty("Y").GetValue(boxObject);
+                                width = (int)boxObject.GetType().GetProperty("Width").GetValue(boxObject);
+                                height = (int)boxObject.GetType().GetProperty("Height").GetValue(boxObject);
+                            }
+                            // Attempt 3: Try to use direct coordinates
+                            else if (textBlock.GetType().GetProperty("X") != null)
+                            {
+                                x = (int)textBlock.GetType().GetProperty("X").GetValue(textBlock);
+                                y = (int)textBlock.GetType().GetProperty("Y").GetValue(textBlock);
+                                width = (int)textBlock.GetType().GetProperty("Width").GetValue(textBlock);
+                                height = (int)textBlock.GetType().GetProperty("Height").GetValue(textBlock);
+                            }
+                            else
+                            {
+                                // Fallback for unknown API format
+                                throw new InvalidOperationException("Unknown TextBlock property structure");
+                            }
+
+                            // パディングオフセットの修正
+                            if (offsetCorrection > 0)
+                            {
+                                x -= offsetCorrection;
+                                y -= offsetCorrection;
+
+                                // 境界チェック
+                                if (x < 0) x = 0;
+                                if (y < 0) y = 0;
+                            }
+
+                            rect = new Rectangle(x, y, width, height);
+                        }
+                        catch (Exception propEx)
+                        {
+                            Debug.WriteLine($"Property access error: {propEx.Message}, falling back to reflection");
+
+                            // リフレクションを使用して情報を取得（下位互換性）
+                            text = GetPropertyValueSafely<string>(textBlock, "Text", "");
+                            confidence = GetPropertyValueSafely<float>(textBlock, "Score", 0.0f);
+
+                            var rectObj = GetPropertyValueSafely<object>(textBlock, "Rect", null) ??
+                                         GetPropertyValueSafely<object>(textBlock, "Box", null);
+
+                            if (rectObj != null)
+                            {
+                                int x = GetPropertyValueSafely<int>(rectObj, "X", 0);
+                                int y = GetPropertyValueSafely<int>(rectObj, "Y", 0);
+                                int width = GetPropertyValueSafely<int>(rectObj, "Width", 0);
+                                int height = GetPropertyValueSafely<int>(rectObj, "Height", 0);
+
+                                // パディングオフセットの修正
+                                if (offsetCorrection > 0)
+                                {
+                                    x -= offsetCorrection;
+                                    y -= offsetCorrection;
+
+                                    // 境界チェック
+                                    if (x < 0) x = 0;
+                                    if (y < 0) y = 0;
+                                }
+
+                                rect = new Rectangle(x, y, width, height);
+                            }
+                            else
+                            {
+                                // Fallback for unknown structure
+                                rect = new Rectangle(0, 0, 100, 20);
+                            }
+                        }
+
+                        // 有効な範囲と認識テキストを確認
+                        if (IsValidRegion(rect) && !string.IsNullOrWhiteSpace(text))
+                        {
+                            regions.Add(new TextRegion(rect, text, confidence));
+                        }
+                    }
+                    catch (Exception textBlockEx)
+                    {
+                        Debug.WriteLine($"Error processing text block: {textBlockEx.Message}");
+                        continue;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error processing OCR result: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 安全にプロパティ値を取得する
+        /// </summary>
+        private T GetPropertyValueSafely<T>(object obj, string propertyName, T defaultValue)
+        {
+            try
+            {
+                var prop = obj.GetType().GetProperty(propertyName);
+                if (prop != null)
+                {
+                    var value = prop.GetValue(obj);
+                    if (value != null)
+                    {
+                        return (T)Convert.ChangeType(value, typeof(T));
+                    }
+                }
+            }
+            catch
+            {
+                // エラーを無視して既定値を返す
+            }
+
+            return defaultValue;
+        }
+
+        /// <summary>
+        /// 安全なパディングを追加した画像を作成
+        /// </summary>
+        private Bitmap AddSafePadding(Bitmap image)
+        {
+            // 境界エラーを避けるため、画像の周囲に余白を追加
+            int padding = 10;
+            Bitmap paddedImage = new Bitmap(image.Width + (padding * 2), image.Height + (padding * 2));
+
+            using (Graphics g = Graphics.FromImage(paddedImage))
+            {
+                g.Clear(Color.White); // 背景を白に
+                g.DrawImage(image, padding, padding, image.Width, image.Height);
+            }
+
+            return paddedImage;
+        }
+
+        /// <summary>
+        /// 有効な領域かどうかをチェック
+        /// </summary>
+        private bool IsValidRegion(Rectangle rect)
+        {
+            // 負の座標や無効なサイズをチェック
+            if (rect.X < 0 || rect.Y < 0 || rect.Width <= 0 || rect.Height <= 0)
+                return false;
+
+            // 極端に大きい値をチェック（誤検出の可能性）
+            if (rect.Width > 2000 || rect.Height > 2000)
+                return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// 前処理オプションの設定
+        /// </summary>
+        public void SetPreprocessingOptions(PreprocessingOptions options)
+        {
+            _preprocessingOptions = options ?? ImagePreprocessor.JapaneseTextPreset;
+        }
+
+        /// <summary>
+        /// 前処理の有効/無効を切り替え
+        /// </summary>
+        public void EnablePreprocessing(bool enable)
+        {
+            _usePreprocessing = enable;
+            _consecutiveErrors = 0; // エラーカウンタもリセット
         }
 
         public void Dispose()
