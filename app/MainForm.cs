@@ -561,6 +561,7 @@ namespace GameTranslationOverlay
 
                 // オーバーレイフォームの作成時にOCRマネージャーとTranslationManagerを渡す
                 _overlayForm = new OverlayForm(_ocrManager, _translationManager);
+
                 _overlayForm.Show();
                 Debug.WriteLine("InitializeServices: オーバーレイフォーム作成完了");
 
@@ -579,6 +580,7 @@ namespace GameTranslationOverlay
                 Application.Exit();
             }
         }
+
 
         /// <summary>
         /// OCR設定UIを現在の状態に更新

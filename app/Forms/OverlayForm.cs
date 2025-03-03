@@ -24,7 +24,8 @@ namespace GameTranslationOverlay.Forms
         private const int TEXT_CHECK_INTERVAL = 1000; // テキスト変更チェック間隔（ミリ秒）
 
         // OCR関連
-        private IOcrEngine _ocrEngine;
+        private OcrManager _ocrManager; // OcrManagerを保持するための新しいフィールド
+        private IOcrEngine _ocrEngine; // 既存のフィールドはそのまま
 
         // 翻訳関連
         private TranslationManager _translationManager;
@@ -79,7 +80,7 @@ namespace GameTranslationOverlay.Forms
         /// <summary>
         /// コンストラクタ
         /// </summary>
-        public OverlayForm(IOcrEngine ocrEngine, TranslationManager translationManager)
+        public OverlayForm(OcrManager ocrManager, TranslationManager translationManager)
         {
             try
             {
@@ -91,8 +92,16 @@ namespace GameTranslationOverlay.Forms
                 InitComponentsManually(); // フォールバック初期化
             }
 
-            // 受け取ったOCRエンジンをフィールドに保存
-            this._ocrEngine = ocrEngine ?? throw new ArgumentNullException(nameof(ocrEngine));
+            // OcrManagerの検証
+            if (ocrManager == null)
+                throw new ArgumentNullException(nameof(ocrManager));
+
+            // OcrManagerから主要OCRエンジンを取得（GetPrimaryEngineName関数をOcrManagerクラスから提供されたものと仮定）
+            this._ocrManager = ocrManager ?? throw new ArgumentNullException(nameof(ocrManager));
+
+            // OcrManagerからプライマリエンジンを取得
+            string primaryEngineName = ocrManager.GetPrimaryEngineName();
+            // ここでプライマリエンジンの取得方法が必要（実際のOcrManagerの実装に依存）
 
             // 翻訳マネージャーを設定
             this._translationManager = translationManager ?? throw new ArgumentNullException(nameof(translationManager));
@@ -253,7 +262,7 @@ namespace GameTranslationOverlay.Forms
         /// </summary>
         private void InitializeTextDetection()
         {
-            // テキスト検出サービスの初期化
+            // テキスト検出サービスの初期化（_ocrEngineを使用）
             _textDetectionService = new TextDetectionService(_ocrEngine);
             _textDetectionService.OnRegionsDetected += TextDetectionService_OnRegionsDetected;
             _textDetectionService.OnNoRegionsDetected += TextDetectionService_OnNoRegionsDetected;

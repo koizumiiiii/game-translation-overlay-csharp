@@ -243,9 +243,9 @@ namespace GameTranslationOverlay.Core.Utils
                             }
 
                             // 値をスケールして範囲内に収める
-                            byte b = Math.Min(Math.Max((int)(blue * scale), 0), 255);
-                            byte g = Math.Min(Math.Max((int)(green * scale), 0), 255);
-                            byte r = Math.Min(Math.Max((int)(red * scale), 0), 255);
+                            byte b = ClampToByte((int)(blue * scale));
+                            byte g = ClampToByte((int)(green * scale));
+                            byte r = ClampToByte((int)(red * scale));
 
                             dest[offset] = b;
                             dest[offset + 1] = g;
@@ -331,11 +331,11 @@ namespace GameTranslationOverlay.Core.Utils
                             Array.Sort(greenValues);
                             Array.Sort(redValues);
 
-                            // メディアン値を設定
+                            // メディアン値を設定（値を0-255の範囲に収める）
                             int medianIndex = blueValues.Length / 2;
-                            dest[offset] = blueValues[medianIndex];
-                            dest[offset + 1] = greenValues[medianIndex];
-                            dest[offset + 2] = redValues[medianIndex];
+                            dest[offset] = ClampToByte(blueValues[medianIndex]);
+                            dest[offset + 1] = ClampToByte(greenValues[medianIndex]);
+                            dest[offset + 2] = ClampToByte(redValues[medianIndex]);
                             dest[offset + 3] = src[offset + 3]; // アルファ値はそのまま
                         }
                     }
@@ -444,6 +444,14 @@ namespace GameTranslationOverlay.Core.Utils
                 Debug.WriteLine($"Error adding padding: {ex.Message}");
                 return image;
             }
+        }
+
+        /// <summary>
+        /// 値を0-255の範囲に収める
+        /// </summary>
+        private static byte ClampToByte(int value)
+        {
+            return (byte)Math.Max(0, Math.Min(255, value));
         }
 
         /// <summary>

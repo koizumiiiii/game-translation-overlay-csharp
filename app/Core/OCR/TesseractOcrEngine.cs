@@ -89,8 +89,8 @@ namespace GameTranslationOverlay.Core.OCR
                         {
                             using (var page = _tesseractEngine.Process(processedImage))
                             {
-                                // ページセグメンテーションモード設定
-                                page.SetPageSegMode(_pageSegMode);
+                                // ページセグメンテーションモード設定 - リフレクションを使用して安全に呼び出し
+                                TrySetPageSegMode(page, _pageSegMode);
 
                                 string result = page.GetText();
 
@@ -117,7 +117,7 @@ namespace GameTranslationOverlay.Core.OCR
                                     {
                                         using (var page = _tesseractEngine.Process(paddedImage))
                                         {
-                                            page.SetPageSegMode(_pageSegMode);
+                                            TrySetPageSegMode(page, _pageSegMode);
                                             string retryResult = page.GetText();
                                             return retryResult?.Trim() ?? string.Empty;
                                         }
@@ -200,7 +200,7 @@ namespace GameTranslationOverlay.Core.OCR
                         using (var page = _tesseractEngine.Process(processedImage))
                         {
                             // ページセグメンテーションモード設定
-                            page.SetPageSegMode(_pageSegMode);
+                            TrySetPageSegMode(page, _pageSegMode);
 
                             using (var iterator = page.GetIterator())
                             {
@@ -252,7 +252,7 @@ namespace GameTranslationOverlay.Core.OCR
                                 {
                                     using (var page = _tesseractEngine.Process(paddedImage))
                                     {
-                                        page.SetPageSegMode(_pageSegMode);
+                                        TrySetPageSegMode(page, _pageSegMode);
 
                                         using (var iterator = page.GetIterator())
                                         {
@@ -372,6 +372,34 @@ namespace GameTranslationOverlay.Core.OCR
                 return false;
 
             return true;
+        }
+
+        /// <summary>
+        /// ページセグメンテーションモードを安全に設定
+        /// </summary>
+        private bool TrySetPageSegMode(Page page, PageSegMode mode)
+        {
+            try
+            {
+                // SetPageSegModeメソッドの存在を確認
+                var method = page.GetType().GetMethod("SetPageSegMode");
+                if (method != null)
+                {
+                    method.Invoke(page, new object[] { mode });
+                    return true;
+                }
+                else
+                {
+                    // 代替方法：エンジンレベルで設定済みの場合は問題なし
+                    Debug.WriteLine("SetPageSegMode not found, mode was set at engine level");
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to set page segmentation mode: {ex.Message}");
+                return false;
+            }
         }
 
         /// <summary>

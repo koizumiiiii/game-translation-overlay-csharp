@@ -36,16 +36,18 @@ namespace GameTranslationOverlay.Core.OCR
                     // OCRモデル設定を最適化
                     _modelConfig = new OCRModelConfig();
 
-                    // 精度向上のためのパラメータ設定
-                    _modelConfig.paddleEnableLiteFP16 = true; // 高速化
-                    _modelConfig.cls = true; // テキスト向き自動検出
-                    _modelConfig.rec = true; // テキスト認識
-                    _modelConfig.det = true; // テキスト検出
+                    // リフレクションを使用して安全にプロパティを設定
+                    // paddleEnableLiteFP16プロパティが存在するか確認し設定
+                    TrySetProperty(_modelConfig, "paddleEnableLiteFP16", true);
 
-                    // モデルパスを指定（環境に応じて変更が必要かもしれません）
-                    // _modelConfig.modelPathDict["det"] = "path_to_detection_model";
-                    // _modelConfig.modelPathDict["cls"] = "path_to_classification_model";
-                    // _modelConfig.modelPathDict["rec"] = "path_to_recognition_model";
+                    // clsプロパティが存在するか確認し設定
+                    TrySetProperty(_modelConfig, "cls", true);
+
+                    // recプロパティが存在するか確認し設定
+                    TrySetProperty(_modelConfig, "rec", true);
+
+                    // detプロパティが存在するか確認し設定
+                    TrySetProperty(_modelConfig, "det", true);
 
                     // エンジン初期化
                     _paddleOcr = new PaddleOCREngine(_modelConfig);
@@ -419,6 +421,27 @@ namespace GameTranslationOverlay.Core.OCR
             }
 
             return paddedImage;
+        }
+
+        /// <summary>
+        /// プロパティを安全に設定するヘルパーメソッド
+        /// </summary>
+        private bool TrySetProperty(object obj, string propertyName, object value)
+        {
+            try
+            {
+                var property = obj.GetType().GetProperty(propertyName);
+                if (property != null && property.CanWrite)
+                {
+                    property.SetValue(obj, value);
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to set property {propertyName}: {ex.Message}");
+            }
+            return false;
         }
 
         /// <summary>
