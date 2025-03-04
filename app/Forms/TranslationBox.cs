@@ -29,6 +29,7 @@ namespace GameTranslationOverlay.Forms
         private ComboBox _targetLanguageComboBox;
         private CheckBox _autoDetectCheckBox;
         private Button _closeButton;
+        private ToolTip _toolTip;
 
         // 翻訳エンジン
         private TranslationManager _translationManager;
@@ -68,6 +69,13 @@ namespace GameTranslationOverlay.Forms
             this.ShowInTaskbar = false;
             this.TopMost = true;
 
+            // ツールチップの初期化
+            _toolTip = new ToolTip();
+            _toolTip.AutoPopDelay = 5000;
+            _toolTip.InitialDelay = 500;
+            _toolTip.ReshowDelay = 200;
+            _toolTip.ShowAlways = true;
+
             // コントロールパネル（上部）
             _controlPanel = new Panel
             {
@@ -106,6 +114,9 @@ namespace GameTranslationOverlay.Forms
             // 初期言語を日本語に設定
             _targetLanguageComboBox.SelectedIndex = Array.IndexOf(LanguageManager.SupportedLanguages, "ja");
 
+            // ツールチップを設定
+            _toolTip.SetToolTip(_targetLanguageComboBox, "翻訳先の言語を選択します");
+
             // 言語選択変更イベント
             _targetLanguageComboBox.SelectedIndexChanged += (s, e) =>
             {
@@ -127,9 +138,13 @@ namespace GameTranslationOverlay.Forms
                 ForeColor = Color.White
             };
 
+            // ツールチップを設定
+            _toolTip.SetToolTip(_autoDetectCheckBox, "テキストの言語を自動的に検出します");
+
             _autoDetectCheckBox.CheckedChanged += (s, e) =>
             {
                 _useAutoDetect = _autoDetectCheckBox.Checked;
+                _targetLanguageComboBox.Enabled = !_useAutoDetect;
                 Debug.WriteLine($"翻訳ボックス: 言語自動検出を {(_useAutoDetect ? "有効" : "無効")} にしました");
             };
 
@@ -148,6 +163,9 @@ namespace GameTranslationOverlay.Forms
 
             _closeButton.FlatAppearance.BorderSize = 0;
             _closeButton.Click += (s, e) => this.Hide();
+
+            // ツールチップを設定
+            _toolTip.SetToolTip(_closeButton, "翻訳ウィンドウを閉じます");
 
             // コントロールパネルにコンポーネントを追加
             _controlPanel.Controls.Add(_targetLanguageComboBox);
@@ -174,6 +192,48 @@ namespace GameTranslationOverlay.Forms
             // リサイズ可能にする
             this.ResizeRedraw = true;
             this.SetStyle(ControlStyles.ResizeRedraw, true);
+        }
+
+        /// <summary>
+        /// 言語自動検出モードを設定する
+        /// </summary>
+        /// <param name="useAutoDetect">自動検出を使用するかどうか</param>
+        public void SetAutoDetect(bool useAutoDetect)
+        {
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() => SetAutoDetect(useAutoDetect)));
+                return;
+            }
+
+            _autoDetectCheckBox.Checked = useAutoDetect;
+            _useAutoDetect = useAutoDetect;
+            _targetLanguageComboBox.Enabled = !useAutoDetect;
+            Debug.WriteLine($"翻訳ボックス: 外部から言語自動検出を {(useAutoDetect ? "有効" : "無効")} に設定しました");
+        }
+
+        /// <summary>
+        /// 翻訳先言語を設定する
+        /// </summary>
+        /// <param name="languageCode">言語コード</param>
+        public void SetTargetLanguage(string languageCode)
+        {
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() => SetTargetLanguage(languageCode)));
+                return;
+            }
+
+            int index = Array.IndexOf(LanguageManager.SupportedLanguages, languageCode);
+            if (index >= 0)
+            {
+                _targetLanguageComboBox.SelectedIndex = index;
+                Debug.WriteLine($"翻訳ボックス: 外部から翻訳先言語を {languageCode} に設定しました");
+            }
+            else
+            {
+                Debug.WriteLine($"翻訳ボックス: 無効な言語コード {languageCode}");
+            }
         }
 
         /// <summary>

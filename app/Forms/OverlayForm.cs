@@ -17,29 +17,17 @@ namespace GameTranslationOverlay.Forms
 {
     public partial class OverlayForm : Form
     {
-        // 領域選択関連
-        private bool isRegionSelectMode = false;
-        private Pen selectionPen = new Pen(Color.Red, 2);
-        private string lastRecognizedText = string.Empty;
-        private const int TEXT_CHECK_INTERVAL = 1000; // テキスト変更チェック間隔（ミリ秒）
-
         // OCR関連
-        private OcrManager _ocrManager; // OcrManagerを保持するための新しいフィールド
-        private IOcrEngine _ocrEngine; // 既存のフィールドはそのまま
+        private OcrManager _ocrManager; // OcrManagerを保持するためのフィールド
 
         // 翻訳関連
         private TranslationManager _translationManager;
 
-        // 翻訳表示用ウィンドウ
-        private TranslationBox _translationBox = null;
+        // 翻訳表示用ウィンドウ - MainFormからアクセスできるようにpublicにする
+        public TranslationBox TranslationBox { get; private set; }
 
         // クリックスルーの状態
         private bool _isClickThrough = true;
-
-        // ホットキーID定数
-        private const int HOTKEY_TOGGLE_OVERLAY = 9001;    // Ctrl+Shift+O
-        private const int HOTKEY_CLEAR_REGION = 9002;      // Ctrl+Shift+C
-        private const int HOTKEY_TOGGLE_REGION_SELECT = 9003; // Ctrl+Shift+R
 
         // ウィンドウ位置変更のための定数とAPI
         private const uint SWP_NOMOVE = 0x0002;
@@ -96,12 +84,8 @@ namespace GameTranslationOverlay.Forms
             if (ocrManager == null)
                 throw new ArgumentNullException(nameof(ocrManager));
 
-            // OcrManagerから主要OCRエンジンを取得（GetPrimaryEngineName関数をOcrManagerクラスから提供されたものと仮定）
-            this._ocrManager = ocrManager ?? throw new ArgumentNullException(nameof(ocrManager));
-
-            // OcrManagerからプライマリエンジンを取得
-            string primaryEngineName = ocrManager.GetPrimaryEngineName();
-            // ここでプライマリエンジンの取得方法が必要（実際のOcrManagerの実装に依存）
+            // OcrManagerを設定
+            this._ocrManager = ocrManager;
 
             // 翻訳マネージャーを設定
             this._translationManager = translationManager ?? throw new ArgumentNullException(nameof(translationManager));
@@ -117,9 +101,6 @@ namespace GameTranslationOverlay.Forms
             // クリックスルーを有効化（デフォルト）
             SetClickThrough(true);
 
-            // ホットキーの登録
-            RegisterHotkeys();
-
             // テキスト検出機能の初期化
             InitializeTextDetection();
 
@@ -134,8 +115,8 @@ namespace GameTranslationOverlay.Forms
         /// </summary>
         private void InitializeTranslationBox()
         {
-            _translationBox = new TranslationBox();
-            _translationBox.SetTranslationManager(_translationManager);
+            TranslationBox = new TranslationBox();
+            TranslationBox.SetTranslationManager(_translationManager);
             Debug.WriteLine("Translation box initialized");
         }
 
@@ -152,60 +133,27 @@ namespace GameTranslationOverlay.Forms
         }
 
         /// <summary>
-        /// ホットキーの登録
+        /// テキスト検出サービスの初期化
         /// </summary>
-        private void RegisterHotkeys()
+        private void InitializeTextDetection()
         {
             try
             {
-                // まず既存のホットキーを解除
-                UnregisterHotkeys();
+                // 一時的にテキスト検出機能を無効化
+                _textDetectionService = null;
+                Debug.WriteLine("テキスト検出サービスは一時的に無効化されています");
 
-                // オーバーレイの表示/非表示 (Ctrl+Shift+O)
-                bool success1 = WindowsAPI.RegisterHotKey(
-                    this.Handle,
-                    HOTKEY_TOGGLE_OVERLAY,
-                    WindowsAPI.MOD_CONTROL | WindowsAPI.MOD_SHIFT,
-                    (int)Keys.O);
-                Debug.WriteLine($"Registering Ctrl+Shift+O hotkey: {(success1 ? "Success" : "Failed")}");
-
-                // 選択領域のクリア (Ctrl+Shift+C)
-                bool success2 = WindowsAPI.RegisterHotKey(
-                    this.Handle,
-                    HOTKEY_CLEAR_REGION,
-                    WindowsAPI.MOD_CONTROL | WindowsAPI.MOD_SHIFT,
-                    (int)Keys.C);
-                Debug.WriteLine($"Registering Ctrl+Shift+C hotkey: {(success2 ? "Success" : "Failed")}");
-
-                // 領域選択モードの切り替え (Ctrl+Shift+R)
-                bool success3 = WindowsAPI.RegisterHotKey(
-                    this.Handle,
-                    HOTKEY_TOGGLE_REGION_SELECT,
-                    WindowsAPI.MOD_CONTROL | WindowsAPI.MOD_SHIFT,
-                    (int)Keys.R);
-                Debug.WriteLine($"Registering Ctrl+Shift+R hotkey: {(success3 ? "Success" : "Failed")}");
+                // 自動非表示タイマーの初期化
+                _autoHideTimer = new Timer
+                {
+                    Interval = AUTO_HIDE_TIMEOUT,
+                    Enabled = false
+                };
+                _autoHideTimer.Tick += AutoHideTimer_Tick;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error registering hotkeys: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// ホットキーの登録解除
-        /// </summary>
-        private void UnregisterHotkeys()
-        {
-            try
-            {
-                WindowsAPI.UnregisterHotKey(this.Handle, HOTKEY_TOGGLE_OVERLAY);
-                WindowsAPI.UnregisterHotKey(this.Handle, HOTKEY_CLEAR_REGION);
-                WindowsAPI.UnregisterHotKey(this.Handle, HOTKEY_TOGGLE_REGION_SELECT);
-                Debug.WriteLine("All hotkeys unregistered");
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error unregistering hotkeys: {ex.Message}");
+                Debug.WriteLine($"テキスト検出サービスの初期化中にエラーが発生しました: {ex.Message}");
             }
         }
 
@@ -241,41 +189,20 @@ namespace GameTranslationOverlay.Forms
         /// </summary>
         public void ShowTranslation(string translatedText)
         {
-            if (_translationBox == null || _translationBox.IsDisposed)
+            if (TranslationBox == null || TranslationBox.IsDisposed)
             {
-                _translationBox = new TranslationBox();
-                _translationBox.SetTranslationManager(_translationManager);
+                TranslationBox = new TranslationBox();
+                TranslationBox.SetTranslationManager(_translationManager);
                 Debug.WriteLine("New translation box created");
             }
 
-            _translationBox.SetTranslationText(translatedText);
+            TranslationBox.SetTranslationText(translatedText);
 
-            if (!_translationBox.Visible)
+            if (!TranslationBox.Visible)
             {
-                _translationBox.Show();
+                TranslationBox.Show();
                 Debug.WriteLine("Translation box shown");
             }
-        }
-
-        /// <summary>
-        /// テキスト検出サービスの初期化
-        /// </summary>
-        private void InitializeTextDetection()
-        {
-            // テキスト検出サービスの初期化（_ocrEngineを使用）
-            _textDetectionService = new TextDetectionService(_ocrEngine);
-            _textDetectionService.OnRegionsDetected += TextDetectionService_OnRegionsDetected;
-            _textDetectionService.OnNoRegionsDetected += TextDetectionService_OnNoRegionsDetected;
-
-            // 自動非表示タイマーの初期化
-            _autoHideTimer = new Timer
-            {
-                Interval = AUTO_HIDE_TIMEOUT,
-                Enabled = false
-            };
-            _autoHideTimer.Tick += AutoHideTimer_Tick;
-
-            Debug.WriteLine("テキスト検出サービスが初期化されました");
         }
 
         /// <summary>
@@ -288,10 +215,10 @@ namespace GameTranslationOverlay.Forms
             if (_textDetectionService != null)
             {
                 _textDetectionService.SetTargetWindow(windowHandle);
-
-                // オーバーレイをウィンドウに合わせる
-                AdjustOverlayToWindow(windowHandle);
             }
+
+            // オーバーレイをウィンドウに合わせる
+            AdjustOverlayToWindow(windowHandle);
         }
 
         /// <summary>
@@ -327,6 +254,7 @@ namespace GameTranslationOverlay.Forms
                 }
             }
         }
+
         /// <summary>
         /// オーバーレイの位置を更新する（外部から呼び出し用）
         /// </summary>
@@ -344,7 +272,10 @@ namespace GameTranslationOverlay.Forms
         public bool ToggleTextDetection()
         {
             if (_textDetectionService == null)
+            {
+                Debug.WriteLine("テキスト検出サービスが無効化されています");
                 return false;
+            }
 
             if (_textDetectionService.IsRunning)
             {
@@ -367,6 +298,10 @@ namespace GameTranslationOverlay.Forms
             {
                 _textDetectionService.Start();
                 Debug.WriteLine("テキスト検出サービスを開始しました");
+            }
+            else
+            {
+                Debug.WriteLine("テキスト検出サービスが無効化されているか、対象ウィンドウが設定されていません");
             }
         }
 
@@ -471,9 +406,9 @@ namespace GameTranslationOverlay.Forms
         /// </summary>
         private void HideTranslationBox()
         {
-            if (_translationBox != null && !_translationBox.IsDisposed && _translationBox.Visible)
+            if (TranslationBox != null && !TranslationBox.IsDisposed && TranslationBox.Visible)
             {
-                _translationBox.Hide();
+                TranslationBox.Hide();
                 Debug.WriteLine("翻訳ボックスを非表示にしました");
             }
         }
@@ -513,10 +448,10 @@ namespace GameTranslationOverlay.Forms
                 // 翻訳処理
                 string translatedText = string.Empty;
 
-                if (_translationBox != null && !_translationBox.IsDisposed)
+                if (TranslationBox != null && !TranslationBox.IsDisposed)
                 {
-                    bool useAutoDetect = _translationBox.IsUsingAutoDetect();
-                    string targetLang = _translationBox.GetSelectedTargetLanguage();
+                    bool useAutoDetect = TranslationBox.IsUsingAutoDetect();
+                    string targetLang = TranslationBox.GetSelectedTargetLanguage();
 
                     if (useAutoDetect)
                     {
@@ -534,7 +469,7 @@ namespace GameTranslationOverlay.Forms
                 }
                 else
                 {
-                    // _translationBoxが利用できない場合
+                    // TranslationBoxが利用できない場合
                     Debug.WriteLine("翻訳ボックスが利用できないため、デフォルトの翻訳設定を使用します");
                     translatedText = await _translationManager.TranslateWithAutoDetectAsync(region.Text);
                 }
@@ -588,10 +523,10 @@ namespace GameTranslationOverlay.Forms
         {
             base.OnMouseClick(e);
 
-            if (e.Button == MouseButtons.Left && !_isClickThrough)
+            if (e.Button == MouseButtons.Left && !_isClickThrough && _textDetectionService != null)
             {
                 Point clickPoint = e.Location;
-                TextRegion clickedRegion = _textDetectionService?.GetRegionAt(clickPoint);
+                TextRegion clickedRegion = _textDetectionService.GetRegionAt(clickPoint);
 
                 if (clickedRegion != null)
                 {
@@ -607,43 +542,6 @@ namespace GameTranslationOverlay.Forms
         protected override void WndProc(ref Message m)
         {
             base.WndProc(ref m);
-
-            // ホットキーメッセージの処理
-            if (m.Msg == 0x0312) // WM_HOTKEY
-            {
-                int id = m.WParam.ToInt32();
-                Debug.WriteLine($"Hotkey message received: ID={id}");
-
-                switch (id)
-                {
-                    case HOTKEY_TOGGLE_OVERLAY: // Ctrl+Shift+O
-                        Debug.WriteLine("Processing HOTKEY_TOGGLE_OVERLAY");
-                        // 翻訳ボックスの表示/非表示を切り替え
-                        if (_translationBox != null && !_translationBox.IsDisposed)
-                        {
-                            _translationBox.Visible = !_translationBox.Visible;
-                        }
-                        break;
-
-                    case HOTKEY_CLEAR_REGION: // Ctrl+Shift+C
-                        Debug.WriteLine("Processing HOTKEY_CLEAR_REGION");
-                        // 選択領域のクリア
-                        _currentTextRegions.Clear();
-                        this.Invalidate();
-                        break;
-
-                    case HOTKEY_TOGGLE_REGION_SELECT: // Ctrl+Shift+R
-                        Debug.WriteLine("Processing HOTKEY_TOGGLE_REGION_SELECT");
-                        // 領域選択モードの切り替え
-                        isRegionSelectMode = !isRegionSelectMode;
-                        SetClickThrough(!isRegionSelectMode);
-                        break;
-
-                    default:
-                        Debug.WriteLine($"Unknown hotkey ID: {id}");
-                        break;
-                }
-            }
         }
 
         /// <summary>
@@ -668,16 +566,13 @@ namespace GameTranslationOverlay.Forms
             }
 
             // 翻訳ボックスの破棄
-            if (_translationBox != null && !_translationBox.IsDisposed)
+            if (TranslationBox != null && !TranslationBox.IsDisposed)
             {
-                _translationBox.Close();
-                _translationBox.Dispose();
-                _translationBox = null;
+                TranslationBox.Close();
+                TranslationBox.Dispose();
+                TranslationBox = null;
                 Debug.WriteLine("翻訳ボックスを破棄しました");
             }
-
-            // ホットキーの解除
-            UnregisterHotkeys();
 
             base.OnFormClosed(e);
         }

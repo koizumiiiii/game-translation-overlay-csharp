@@ -298,11 +298,12 @@ namespace GameTranslationOverlay.Core.OCR
         }
 
         /// <summary>
-        /// 現在のプライマリエンジン名を取得
+        /// 現在のプライマリエンジンのインスタンスを取得
         /// </summary>
-        public string GetPrimaryEngineName()
+        /// <returns>プライマリOCRエンジンのインスタンス</returns>
+        public GameTranslationOverlay.Core.OCR.IOcrEngine GetPrimaryEngine()
         {
-            return GetEngineName(_primaryEngine);
+            return _primaryEngine;
         }
 
         /// <summary>
