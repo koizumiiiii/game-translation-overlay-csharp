@@ -37,6 +37,12 @@ namespace GameTranslationOverlay.Forms
         // 自動検出フラグ
         private bool _useAutoDetect = true;
 
+        // チェックボックスイベントハンドラを保持する変数
+        private EventHandler _autoDetectCheckBoxHandler;
+
+        // 言語設定変更イベント（MainFormで購読可能）
+        public event EventHandler<TranslationSettingsChangedEventArgs> TranslationSettingsChanged;
+
         /// <summary>
         /// コンストラクタ
         /// </summary>
@@ -120,10 +126,19 @@ namespace GameTranslationOverlay.Forms
             // 言語選択変更イベント
             _targetLanguageComboBox.SelectedIndexChanged += (s, e) =>
             {
-                if (_translationManager != null && _targetLanguageComboBox.SelectedIndex >= 0)
+                if (_targetLanguageComboBox.SelectedIndex >= 0)
                 {
                     string selectedLang = LanguageManager.SupportedLanguages[_targetLanguageComboBox.SelectedIndex];
-                    _translationManager.SetPreferredTargetLanguage(selectedLang);
+
+                    // 翻訳マネージャーに設定
+                    if (_translationManager != null)
+                    {
+                        _translationManager.SetPreferredTargetLanguage(selectedLang);
+                    }
+
+                    // イベント発火して外部（MainForm）に通知
+                    OnTranslationSettingsChanged(selectedLang, _useAutoDetect);
+
                     Debug.WriteLine($"翻訳ボックス: 翻訳先言語を {selectedLang} に設定しました");
                 }
             };
@@ -141,12 +156,24 @@ namespace GameTranslationOverlay.Forms
             // ツールチップを設定
             _toolTip.SetToolTip(_autoDetectCheckBox, "テキストの言語を自動的に検出します");
 
-            _autoDetectCheckBox.CheckedChanged += (s, e) =>
+            // チェックボックスのイベントハンドラを変数に保存
+            _autoDetectCheckBoxHandler = new EventHandler((s, e) =>
             {
                 _useAutoDetect = _autoDetectCheckBox.Checked;
                 _targetLanguageComboBox.Enabled = !_useAutoDetect;
+
+                // イベント発火して外部（MainForm）に通知
+                if (_targetLanguageComboBox.SelectedIndex >= 0)
+                {
+                    string selectedLang = LanguageManager.SupportedLanguages[_targetLanguageComboBox.SelectedIndex];
+                    OnTranslationSettingsChanged(selectedLang, _useAutoDetect);
+                }
+
                 Debug.WriteLine($"翻訳ボックス: 言語自動検出を {(_useAutoDetect ? "有効" : "無効")} にしました");
-            };
+            });
+
+            // イベントハンドラを登録
+            _autoDetectCheckBox.CheckedChanged += _autoDetectCheckBoxHandler;
 
             // 閉じるボタン
             _closeButton = new Button
@@ -195,6 +222,14 @@ namespace GameTranslationOverlay.Forms
         }
 
         /// <summary>
+        /// 翻訳設定変更イベント発火メソッド
+        /// </summary>
+        protected virtual void OnTranslationSettingsChanged(string targetLanguage, bool autoDetect)
+        {
+            TranslationSettingsChanged?.Invoke(this, new TranslationSettingsChangedEventArgs(targetLanguage, autoDetect));
+        }
+
+        /// <summary>
         /// 言語自動検出モードを設定する
         /// </summary>
         /// <param name="useAutoDetect">自動検出を使用するかどうか</param>
@@ -206,9 +241,16 @@ namespace GameTranslationOverlay.Forms
                 return;
             }
 
+            // イベントハンドラを一時的に解除
+            _autoDetectCheckBox.CheckedChanged -= _autoDetectCheckBoxHandler;
+
             _autoDetectCheckBox.Checked = useAutoDetect;
             _useAutoDetect = useAutoDetect;
             _targetLanguageComboBox.Enabled = !useAutoDetect;
+
+            // イベントハンドラを再登録
+            _autoDetectCheckBox.CheckedChanged += _autoDetectCheckBoxHandler;
+
             Debug.WriteLine($"翻訳ボックス: 外部から言語自動検出を {(useAutoDetect ? "有効" : "無効")} に設定しました");
         }
 
@@ -228,6 +270,13 @@ namespace GameTranslationOverlay.Forms
             if (index >= 0)
             {
                 _targetLanguageComboBox.SelectedIndex = index;
+
+                // 翻訳マネージャーに設定
+                if (_translationManager != null)
+                {
+                    _translationManager.SetPreferredTargetLanguage(languageCode);
+                }
+
                 Debug.WriteLine($"翻訳ボックス: 外部から翻訳先言語を {languageCode} に設定しました");
             }
             else
@@ -249,6 +298,21 @@ namespace GameTranslationOverlay.Forms
             }
 
             _textBox.Text = text;
+
+            // テキストが日本語かどうかを判断し、言語設定を自動調整（必要に応じて）
+            if (_useAutoDetect && !string.IsNullOrEmpty(text) && text.Length > 5)
+            {
+                string detectedLang = LanguageManager.DetectLanguage(text);
+
+                // 検出された言語が現在選択されている言語と同じ場合は、別の言語に切り替える
+                if (detectedLang == GetSelectedTargetLanguage())
+                {
+                    // 例: 検出された言語が英語で、選択されている言語も英語の場合、日本語に切り替える
+                    string newTargetLang = (detectedLang == "en") ? "ja" : "en";
+                    SetTargetLanguage(newTargetLang);
+                    Debug.WriteLine($"翻訳テキストから言語を検出: {detectedLang}、選択言語と同じため表示言語を{newTargetLang}に変更しました");
+                }
+            }
         }
 
         /// <summary>
@@ -271,7 +335,7 @@ namespace GameTranslationOverlay.Forms
             {
                 return LanguageManager.SupportedLanguages[_targetLanguageComboBox.SelectedIndex];
             }
-            return "en"; // デフォルト
+            return "ja"; // デフォルト
         }
 
         /// <summary>
@@ -376,6 +440,21 @@ namespace GameTranslationOverlay.Forms
                 _controlPanel.Width = this.Width;
                 _closeButton.Location = new Point(_controlPanel.Width - 30, 5);
             }
+        }
+    }
+
+    /// <summary>
+    /// 翻訳設定変更イベント引数
+    /// </summary>
+    public class TranslationSettingsChangedEventArgs : EventArgs
+    {
+        public string TargetLanguage { get; private set; }
+        public bool AutoDetect { get; private set; }
+
+        public TranslationSettingsChangedEventArgs(string targetLanguage, bool autoDetect)
+        {
+            TargetLanguage = targetLanguage;
+            AutoDetect = autoDetect;
         }
     }
 }

@@ -6,14 +6,15 @@ using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Linq;
 using System.IO;
-using GameTranslationOverlay.Core.OCR;
+// 名前空間の衝突を解決するためのエイリアス
+using OCRNamespace = GameTranslationOverlay.Core.OCR;
+// 他の名前空間は通常どおりインポート
 using GameTranslationOverlay.Core.UI;
 using GameTranslationOverlay.Forms;
 using GameTranslationOverlay.Utils;
 using GameTranslationOverlay.Core.Models;
 using GameTranslationOverlay.Core.Translation.Services;
 using GameTranslationOverlay.Core.Translation.Interfaces;
-using GameTranslationOverlay.Core.Utils;
 
 namespace GameTranslationOverlay
 {
@@ -36,7 +37,7 @@ namespace GameTranslationOverlay
         private OverlayForm _overlayForm;
 
         // OCR関連
-        private OcrManager _ocrManager;
+        private OCRNamespace.OcrManager _ocrManager;
 
         // OCR設定UI要素
         private GroupBox _ocrSettingsGroup;
@@ -162,7 +163,7 @@ namespace GameTranslationOverlay
                 Size = new Size(200, 160)
             };
 
-            // OCRエンジン選択
+            // OCRエンジン名ラベル (読み取り専用情報)
             Label engineLabel = new Label
             {
                 Text = "OCRエンジン:",
@@ -170,43 +171,19 @@ namespace GameTranslationOverlay
                 AutoSize = true
             };
 
-            _ocrEngineComboBox = new ComboBox
+            Label engineNameLabel = new Label
             {
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Location = new Point(120, 22),
-                Size = new Size(70, 21)
-            };
-            _ocrEngineComboBox.Items.AddRange(new object[] { "Auto", "PaddleOCR", "Tesseract" });
-            _ocrEngineComboBox.SelectedIndex = 0;
-            _ocrEngineComboBox.SelectedIndexChanged += (s, e) =>
-            {
-                if (_ocrManager != null)
-                {
-                    _ocrManager.SetOcrEngine(_ocrEngineComboBox.SelectedItem.ToString());
-                }
-            };
-
-            // フォールバックチェックボックス
-            _useFallbackCheckBox = new CheckBox
-            {
-                Text = "フォールバック使用",
-                Location = new Point(10, 50),
+                Text = "PaddleOCR",
+                Location = new Point(120, 25),
                 AutoSize = true,
-                Checked = true
-            };
-            _useFallbackCheckBox.CheckedChanged += (s, e) =>
-            {
-                if (_ocrManager != null)
-                {
-                    _ocrManager.SetUseFallback(_useFallbackCheckBox.Checked);
-                }
+                ForeColor = Color.DarkBlue
             };
 
             // 前処理チェックボックス
             _usePreprocessingCheckBox = new CheckBox
             {
                 Text = "画像前処理を適用",
-                Location = new Point(10, 75),
+                Location = new Point(10, 50),
                 AutoSize = true,
                 Checked = true
             };
@@ -222,13 +199,13 @@ namespace GameTranslationOverlay
             Label thresholdLabel = new Label
             {
                 Text = "信頼度閾値:",
-                Location = new Point(10, 100),
+                Location = new Point(10, 80),
                 AutoSize = true
             };
 
             _confidenceTrackBar = new TrackBar
             {
-                Location = new Point(10, 120),
+                Location = new Point(10, 100),
                 Size = new Size(140, 45),
                 Minimum = 0,
                 Maximum = 100,
@@ -239,7 +216,7 @@ namespace GameTranslationOverlay
             _confidenceLabel = new Label
             {
                 Text = "0.60",
-                Location = new Point(160, 120),
+                Location = new Point(160, 100),
                 AutoSize = true
             };
 
@@ -256,8 +233,7 @@ namespace GameTranslationOverlay
 
             // コントロールをグループに追加
             _ocrSettingsGroup.Controls.Add(engineLabel);
-            _ocrSettingsGroup.Controls.Add(_ocrEngineComboBox);
-            _ocrSettingsGroup.Controls.Add(_useFallbackCheckBox);
+            _ocrSettingsGroup.Controls.Add(engineNameLabel);
             _ocrSettingsGroup.Controls.Add(_usePreprocessingCheckBox);
             _ocrSettingsGroup.Controls.Add(thresholdLabel);
             _ocrSettingsGroup.Controls.Add(_confidenceTrackBar);
@@ -594,7 +570,7 @@ namespace GameTranslationOverlay
                 UpdateStatus("初期化中...");
 
                 // OCRマネージャーの初期化
-                _ocrManager = new OcrManager();
+                _ocrManager = new OCRNamespace.OcrManager();
                 await _ocrManager.InitializeAsync();
                 Debug.WriteLine("InitializeServices: OCRマネージャー初期化完了");
 
@@ -636,11 +612,14 @@ namespace GameTranslationOverlay
             if (_ocrManager == null)
                 return;
 
-            // デフォルトでAutoを選択
-            int index = 0;
+            // コンボボックスの初期化
+            _ocrEngineComboBox = new ComboBox();
 
-            // GetPrimaryEngineNameメソッドは現在問題があるため使用しない
-            _ocrEngineComboBox.SelectedIndex = index;
+            // アイテムが0個の場合に0を設定すると例外が発生するため、まずアイテムを追加
+            _ocrEngineComboBox.Items.Add("PaddleOCR");
+
+            // アイテムを追加した後でSelectedIndexを設定
+            _ocrEngineComboBox.SelectedIndex = 0;
         }
 
         private void UpdateStatus(string message, bool isError = false)
@@ -747,20 +726,20 @@ namespace GameTranslationOverlay
 
                 var testScenarios = new[]
                 {
-                    "dialog_text",
-                    "menu_text",
-                    "system_message",
-                    "battle_text",
-                    "item_description"
-                };
+            "dialog_text",
+            "menu_text",
+            "system_message",
+            "battle_text",
+            "item_description"
+        };
 
                 // 各前処理オプションのテスト
-                var preprocessingOptions = new PreprocessingOptions[]
+                var preprocessingOptions = new OCRNamespace.PreprocessingOptions[]
                 {
-                    null, // デフォルト（前処理なし）
-                    ImagePreprocessor.JapaneseTextPreset,
-                    ImagePreprocessor.EnglishTextPreset,
-                    ImagePreprocessor.GameTextLightPreset
+            null, // デフォルト（前処理なし）
+            OCRNamespace.ImagePreprocessor.JapaneseTextPreset,
+            OCRNamespace.ImagePreprocessor.EnglishTextPreset,
+            OCRNamespace.ImagePreprocessor.GameTextLightPreset
                 };
 
                 string[] optionNames = { "Default", "Japanese Preset", "English Preset", "Light Preset" };

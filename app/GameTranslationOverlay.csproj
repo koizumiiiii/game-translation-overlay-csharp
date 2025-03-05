@@ -69,11 +69,12 @@
     <Compile Include="Core\OCR\OcrManager.cs" />
     <Compile Include="Core\OCR\OcrTest.cs" />
     <Compile Include="Core\OCR\PaddleOcrEngine.cs" />
+    <Compile Include="Core\OCR\PreprocessingOptions.cs" />
+    <Compile Include="Core\OCR\TesseractOcrEngine.cs" />
     <Compile Include="Core\OCR\TextDetectionService.cs" />
     <Compile Include="Core\OCR\TextRegion.cs" />
     <Compile Include="Core\OCR\Utils\WindowsRuntimeExtensions.cs" />
     <Compile Include="Core\TextDetection\LegacyTextDetectionService.cs" />
-    <Compile Include="Core\TextDetection\TextRegion.cs" />
     <Compile Include="Core\Translation\Configuration\TranslationConfig.cs" />
     <Compile Include="Core\Translation\Exceptions\TranslationException.cs" />
     <Compile Include="Core\Translation\Interfaces\ITranslationEngine.cs" />
@@ -86,7 +87,6 @@
     <Compile Include="Core\Translation\Utils\ErrorHandlingExtensions.cs" />
     <Compile Include="Core\UI\WindowSelector.cs" />
     <Compile Include="Core\Utils\ImagePreprocessor.cs" />
-    <Compile Include="Core\Utils\ScreenCapture.cs" />
     <Compile Include="Core\Utils\TextDetectionUtil.cs" />
     <Compile Include="Core\WindowManagement\WindowSelector.cs" />
     <Compile Include="Forms\OcrTestForm.cs">
@@ -96,7 +96,6 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Core\OCR\IOcrEngine.cs" />
-    <Compile Include="Core\OCR\TesseractOcrEngine.cs" />
     <Compile Include="Core\Region\RegionManager.cs" />
     <Compile Include="Core\Region\SelectionRegion.cs" />
     <Compile Include="Forms\OverlayForm.Designer.cs">
@@ -133,6 +132,24 @@
     <None Include=".docker\docker-compose.yml" />
     <None Include="App.config" />
     <None Include="packages.config" />
+    <None Include="PaddleOCRModels\ch_PP-OCRv3_det\inference.pdiparams">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="PaddleOCRModels\ch_PP-OCRv3_det\inference.pdmodel">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="PaddleOCRModels\ch_ppocr_mobile_v2.0_cls\inference.pdiparams">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="PaddleOCRModels\ch_ppocr_mobile_v2.0_cls\inference.pdmodel">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="PaddleOCRModels\japan_PP-OCRv3_rec\inference.pdiparams">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="PaddleOCRModels\japan_PP-OCRv3_rec\inference.pdmodel">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Include="Properties\Settings.settings">
       <Generator>SettingsSingleFileGenerator</Generator>
       <LastGenOutput>Settings.Designer.cs</LastGenOutput>

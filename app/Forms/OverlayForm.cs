@@ -117,6 +117,11 @@ namespace GameTranslationOverlay.Forms
         {
             TranslationBox = new TranslationBox();
             TranslationBox.SetTranslationManager(_translationManager);
+
+            // 初期言語設定（日本語をメインターゲットにする）
+            TranslationBox.SetTargetLanguage("ja");
+            TranslationBox.SetAutoDetect(true);
+
             Debug.WriteLine("Translation box initialized");
         }
 
@@ -139,9 +144,15 @@ namespace GameTranslationOverlay.Forms
         {
             try
             {
-                // 一時的にテキスト検出機能を無効化
-                _textDetectionService = null;
-                Debug.WriteLine("テキスト検出サービスは一時的に無効化されています");
+                // OcrManagerを使用してTextDetectionServiceを初期化
+                _textDetectionService = new TextDetectionService(_ocrManager);
+                _textDetectionService.OnRegionsDetected += TextDetectionService_OnRegionsDetected;
+                _textDetectionService.OnNoRegionsDetected += TextDetectionService_OnNoRegionsDetected;
+
+                // 翻訳対象を主に英語→日本語にフォーカスするための調整
+                _textDetectionService.SetMinimumConfidence(0.65f); // 信頼度の閾値を少し上げる
+
+                Debug.WriteLine("テキスト検出サービスを初期化しました");
 
                 // 自動非表示タイマーの初期化
                 _autoHideTimer = new Timer
@@ -154,6 +165,8 @@ namespace GameTranslationOverlay.Forms
             catch (Exception ex)
             {
                 Debug.WriteLine($"テキスト検出サービスの初期化中にエラーが発生しました: {ex.Message}");
+                // エラーが発生した場合は一時的に無効化
+                _textDetectionService = null;
             }
         }
 
@@ -215,6 +228,7 @@ namespace GameTranslationOverlay.Forms
             if (_textDetectionService != null)
             {
                 _textDetectionService.SetTargetWindow(windowHandle);
+                Debug.WriteLine($"テキスト検出サービスの対象ウィンドウを設定しました: {windowHandle}");
             }
 
             // オーバーレイをウィンドウに合わせる
@@ -273,8 +287,14 @@ namespace GameTranslationOverlay.Forms
         {
             if (_textDetectionService == null)
             {
-                Debug.WriteLine("テキスト検出サービスが無効化されています");
-                return false;
+                // TextDetectionServiceが無効の場合は再作成を試みる
+                InitializeTextDetection();
+
+                if (_textDetectionService == null)
+                {
+                    Debug.WriteLine("テキスト検出サービスの作成に失敗しました");
+                    return false;
+                }
             }
 
             if (_textDetectionService.IsRunning)
@@ -284,8 +304,17 @@ namespace GameTranslationOverlay.Forms
             }
             else
             {
-                _textDetectionService.Start();
-                return true;
+                if (_targetWindowHandle != IntPtr.Zero)
+                {
+                    _textDetectionService.SetTargetWindow(_targetWindowHandle);
+                    _textDetectionService.Start();
+                    return true;
+                }
+                else
+                {
+                    Debug.WriteLine("対象ウィンドウが設定されていないため、テキスト検出を開始できません");
+                    return false;
+                }
             }
         }
 
@@ -301,7 +330,14 @@ namespace GameTranslationOverlay.Forms
             }
             else
             {
-                Debug.WriteLine("テキスト検出サービスが無効化されているか、対象ウィンドウが設定されていません");
+                if (_textDetectionService == null)
+                {
+                    Debug.WriteLine("テキスト検出サービスが初期化されていないため、検出を開始できません");
+                }
+                else
+                {
+                    Debug.WriteLine("対象ウィンドウが設定されていないため、テキスト検出を開始できません");
+                }
             }
         }
 
@@ -334,7 +370,7 @@ namespace GameTranslationOverlay.Forms
 
                 // 自動で一番大きな（または信頼度の高い）テキスト領域を翻訳
                 TextRegion bestRegion = GetBestTextRegion(regions);
-                if (bestRegion != null && (_lastTranslatedRegion == null || !_lastTranslatedRegion.Equals(bestRegion)))
+                if (bestRegion != null && (_lastTranslatedRegion == null || !IsSameTextRegion(_lastTranslatedRegion, bestRegion)))
                 {
                     Debug.WriteLine("テキスト領域を自動翻訳します");
                     TranslateTextRegion(bestRegion);
@@ -343,6 +379,15 @@ namespace GameTranslationOverlay.Forms
                 // 自動非表示タイマーをリセット
                 ResetAutoHideTimer();
             }
+        }
+
+        /// <summary>
+        /// 2つのテキスト領域が同じかどうかをチェック
+        /// </summary>
+        private bool IsSameTextRegion(TextRegion a, TextRegion b)
+        {
+            // テキスト内容が同じであれば、同じ領域とみなす（より単純で堅牢な比較）
+            return a != null && b != null && a.Text == b.Text;
         }
 
         /// <summary>
@@ -421,9 +466,19 @@ namespace GameTranslationOverlay.Forms
             if (regions == null || regions.Count == 0)
                 return null;
 
-            // 最も大きな領域または信頼度の高い領域を選択
-            // ここでは単純に面積で選択していますが、アプリケーションの要件に応じて調整可能
-            return regions.OrderByDescending(r => r.Bounds.Width * r.Bounds.Height).First();
+            // 言語検出を使って、英語のテキスト領域を優先的に選択
+            var englishRegions = regions.Where(r => !string.IsNullOrWhiteSpace(r.Text) &&
+                                                    LanguageManager.DetectLanguage(r.Text) == "en")
+                                        .ToList();
+
+            if (englishRegions.Count > 0)
+            {
+                // 英語のテキスト領域がある場合は、そのうち最も大きいものを選択
+                return englishRegions.OrderByDescending(r => r.Confidence * r.Bounds.Width * r.Bounds.Height).First();
+            }
+
+            // 英語のテキスト領域がなければ、信頼度と面積の組み合わせで最適なものを選択
+            return regions.OrderByDescending(r => r.Confidence * r.Bounds.Width * r.Bounds.Height).First();
         }
 
         /// <summary>
@@ -461,8 +516,21 @@ namespace GameTranslationOverlay.Forms
                     }
                     else
                     {
-                        // 言語を明示的に指定
+                        // 言語を明示的に指定（英語→日本語の翻訳を優先）
                         string sourceLang = LanguageManager.DetectLanguage(region.Text);
+                        if (sourceLang == "en" && targetLang != "ja")
+                        {
+                            // 英語テキストが検出され、翻訳先が日本語ではない場合、日本語に設定
+                            targetLang = "ja";
+                            Debug.WriteLine("英語テキストを検出したため、翻訳先を日本語に設定しました");
+
+                            // UIも更新
+                            if (TranslationBox != null && !TranslationBox.IsDisposed)
+                            {
+                                TranslationBox.SetTargetLanguage(targetLang);
+                            }
+                        }
+
                         translatedText = await _translationManager.TranslateAsync(region.Text, sourceLang, targetLang);
                         Debug.WriteLine($"{sourceLang}から{targetLang}へ翻訳しました");
                     }
@@ -523,10 +591,21 @@ namespace GameTranslationOverlay.Forms
         {
             base.OnMouseClick(e);
 
-            if (e.Button == MouseButtons.Left && !_isClickThrough && _textDetectionService != null)
+            if (e.Button == MouseButtons.Left && !_isClickThrough)
             {
                 Point clickPoint = e.Location;
-                TextRegion clickedRegion = _textDetectionService.GetRegionAt(clickPoint);
+
+                // テキスト検出サービスから直接クリック位置のテキスト領域を取得
+                TextRegion clickedRegion = null;
+                if (_textDetectionService != null)
+                {
+                    clickedRegion = _textDetectionService.GetRegionAt(clickPoint);
+                }
+                else
+                {
+                    // テキスト検出サービスが利用できない場合は、現在表示中の領域から検索
+                    clickedRegion = _currentTextRegions.FirstOrDefault(r => r.Bounds.Contains(clickPoint));
+                }
 
                 if (clickedRegion != null)
                 {

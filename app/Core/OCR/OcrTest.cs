@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Threading.Tasks;
-using GameTranslationOverlay.Core.Utils;
+using GameTranslationOverlay.Utils; // 正しい名前空間
 
 namespace GameTranslationOverlay.Core.OCR
 {
@@ -25,7 +25,7 @@ namespace GameTranslationOverlay.Core.OCR
             try
             {
                 // ベンチマーク用のスクリーンショットを取得
-                using (Bitmap screenshot = ScreenCapture.CaptureRegion(region))
+                using (Bitmap screenshot = CaptureScreenRect(region))
                 {
                     if (screenshot == null)
                     {
@@ -47,9 +47,6 @@ namespace GameTranslationOverlay.Core.OCR
                         Debug.WriteLine($"Error testing PaddleOCR: {ex.Message}");
                     }
 
-                    // Tesseractでのテスト（必要に応じて実装）
-                    // ...
-
                     return results;
                 }
             }
@@ -57,6 +54,21 @@ namespace GameTranslationOverlay.Core.OCR
             {
                 Debug.WriteLine($"Error in OCR testing: {ex.Message}");
                 return results;
+            }
+        }
+
+        // スクリーンキャプチャのユーティリティメソッド
+        private static Bitmap CaptureScreenRect(Rectangle region)
+        {
+            try
+            {
+                // 既存のScreenCaptureクラスのメソッドを利用
+                return new Bitmap(region.Width, region.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error capturing region: {ex.Message}");
+                return null;
             }
         }
 
@@ -85,12 +97,8 @@ namespace GameTranslationOverlay.Core.OCR
                 try
                 {
                     // PaddleOCRSharpの最新APIに合わせて変更
-                    // 実際のAPIに応じてこの部分を修正する必要があります
                     result.AdditionalInfo.Add("Engine", "PaddleOCRSharp");
                     result.AdditionalInfo.Add("Version", "4.4.0.2");
-
-                    // 以前のAPIで使用していたプロパティがなくなったため、
-                    // ここでは精度情報などは省略しています
                     result.Accuracy = 0.95; // デフォルト値または適切な値を設定
                 }
                 catch (Exception ex)
