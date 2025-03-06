@@ -74,6 +74,7 @@
     <Compile Include="Core\OCR\TextDetectionService.cs" />
     <Compile Include="Core\OCR\TextRegion.cs" />
     <Compile Include="Core\OCR\Utils\WindowsRuntimeExtensions.cs" />
+    <Compile Include="Core\Security\ApiKeyProtector.cs" />
     <Compile Include="Core\TextDetection\LegacyTextDetectionService.cs" />
     <Compile Include="Core\Translation\Configuration\TranslationConfig.cs" />
     <Compile Include="Core\Translation\Exceptions\TranslationException.cs" />

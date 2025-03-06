@@ -26,8 +26,9 @@ venv/
 
 # Visual Studio / C#
 .vs/
-bin/
-obj/
+app/.vs/
+app/bin/
+app/obj/
 *.user
 *.userosscache
 *.sln.docstates
@@ -37,20 +38,24 @@ x64/
 x86/
 [Aa][Rr][Mm]/
 [Aa][Rr][Mm]64/
-bld/
+app/bld/
 [Bb]in/
 [Oo]bj/
 [Ll]og/
-packages/
+app/packages/
 *.nupkg
 *.nuspec
 
 # Tesseract files
-tessdata/*
-!tessdata/.gitkeep
+app/tessdata/*
+app/!tessdata/.gitkeep
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+
+app/Properties/Resources.resx
+app/Properties/Resources.Designer.cs
+app/.docker/data/
