@@ -24,6 +24,9 @@ namespace GameTranslationOverlay.Core.Translation.Services
         private bool _isInitialized = false;
         private List<LanguageInfo> _supportedLanguages = new List<LanguageInfo>();
 
+        // フォールバック用の翻訳エンジン
+        private readonly ITranslationEngine _fallbackEngine;
+
         /// <summary>
         /// AITranslationEngineのコンストラクタ
         /// </summary>
@@ -31,12 +34,14 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// <param name="model">使用するモデル（デフォルト: gpt-3.5-turbo）</param>
         /// <param name="maxTokensPerRequest">1リクエストあたりの最大トークン数</param>
         /// <param name="totalTokenLimit">デモ版での合計トークン上限</param>
-        public AITranslationEngine(string apiKey, string model = "gpt-3.5-turbo", int maxTokensPerRequest = 100, int totalTokenLimit = 5000)
+        /// <param name="fallbackEngine">フォールバック用翻訳エンジン（オプション）</param>
+        public AITranslationEngine(string apiKey, string model = "gpt-3.5-turbo", int maxTokensPerRequest = 100, int totalTokenLimit = 5000, ITranslationEngine fallbackEngine = null)
         {
             _apiKey = apiKey ?? throw new ArgumentNullException(nameof(apiKey));
             _model = model;
             _maxTokensPerRequest = maxTokensPerRequest;
             _remainingTokens = totalTokenLimit;
+            _fallbackEngine = fallbackEngine;
 
             _httpClient = new HttpClient();
             _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
@@ -44,6 +49,8 @@ namespace GameTranslationOverlay.Core.Translation.Services
 
             // サポートされている言語の初期化
             InitializeSupportedLanguages();
+
+            Debug.WriteLine($"AITranslationEngine: 初期化 (モデル={model}, 最大トークン={maxTokensPerRequest}, 合計トークン上限={totalTokenLimit})");
         }
 
         /// <summary>
@@ -93,7 +100,7 @@ namespace GameTranslationOverlay.Core.Translation.Services
                 if (response.IsSuccessStatusCode)
                 {
                     _isInitialized = true;
-                    Debug.WriteLine("AITranslationEngine: Initialized successfully");
+                    Debug.WriteLine("AITranslationEngine: 初期化に成功しました");
                 }
                 else
                 {
@@ -103,7 +110,7 @@ namespace GameTranslationOverlay.Core.Translation.Services
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"AITranslationEngine initialization error: {ex.Message}");
+                Debug.WriteLine($"AITranslationEngine 初期化エラー: {ex.Message}");
                 throw new TranslationException("AI翻訳エンジンの初期化に失敗しました。APIキーを確認してください。", ex);
             }
         }
@@ -124,7 +131,7 @@ namespace GameTranslationOverlay.Core.Translation.Services
 
             if (string.IsNullOrWhiteSpace(text))
             {
-                Debug.WriteLine("Warning: Empty text provided for translation");
+                Debug.WriteLine("Warning: 翻訳のために空のテキストが提供されました");
                 return string.Empty;
             }
 
@@ -133,7 +140,15 @@ namespace GameTranslationOverlay.Core.Translation.Services
 
             if (_remainingTokens < estimatedTokens)
             {
-                Debug.WriteLine($"Token limit reached: {_remainingTokens} remaining, {estimatedTokens} estimated");
+                Debug.WriteLine($"トークン上限に達しました: 残り{_remainingTokens}, 必要約{estimatedTokens}");
+
+                // フォールバックエンジンが利用可能な場合
+                if (_fallbackEngine != null)
+                {
+                    Debug.WriteLine("フォールバック翻訳エンジンを使用します");
+                    return await _fallbackEngine.TranslateAsync(text, fromLang, toLang);
+                }
+
                 throw new TranslationException($"トークン上限に達しました。残りトークン: {_remainingTokens}、必要トークン: 約{estimatedTokens}。デモ版では{_remainingTokens}トークンまで利用可能です。");
             }
 
@@ -168,14 +183,14 @@ namespace GameTranslationOverlay.Core.Translation.Services
                 if (response.IsSuccessStatusCode)
                 {
                     string responseBody = await response.Content.ReadAsStringAsync();
-                    Debug.WriteLine($"API response: {responseBody}");
+                    Debug.WriteLine($"API レスポンス: {responseBody}");
 
                     dynamic responseObject = JsonConvert.DeserializeObject<dynamic>(responseBody);
 
                     // 使用トークン数を更新
                     int tokensUsed = (int)responseObject.usage.total_tokens;
                     _remainingTokens -= tokensUsed;
-                    Debug.WriteLine($"Tokens used: {tokensUsed}, remaining: {_remainingTokens}");
+                    Debug.WriteLine($"使用トークン: {tokensUsed}, 残り: {_remainingTokens}");
 
                     // 翻訳結果を取得
                     string translation = responseObject.choices[0].message.content.ToString().Trim();
@@ -184,7 +199,15 @@ namespace GameTranslationOverlay.Core.Translation.Services
                 else
                 {
                     string errorContent = await response.Content.ReadAsStringAsync();
-                    Debug.WriteLine($"API error: {response.StatusCode} - {errorContent}");
+                    Debug.WriteLine($"API エラー: {response.StatusCode} - {errorContent}");
+
+                    // フォールバックエンジンが利用可能な場合
+                    if (_fallbackEngine != null)
+                    {
+                        Debug.WriteLine("APIエラーが発生したため、フォールバック翻訳エンジンを使用します");
+                        return await _fallbackEngine.TranslateAsync(text, fromLang, toLang);
+                    }
+
                     throw new TranslationException($"AI翻訳エラー: {response.StatusCode} - {errorContent}");
                 }
             }
@@ -194,17 +217,41 @@ namespace GameTranslationOverlay.Core.Translation.Services
             }
             catch (HttpRequestException ex)
             {
-                Debug.WriteLine($"HTTP Request Error: {ex.Message}");
+                Debug.WriteLine($"HTTP リクエストエラー: {ex.Message}");
+
+                // フォールバックエンジンが利用可能な場合
+                if (_fallbackEngine != null)
+                {
+                    Debug.WriteLine("HTTP接続エラーが発生したため、フォールバック翻訳エンジンを使用します");
+                    return await _fallbackEngine.TranslateAsync(text, fromLang, toLang);
+                }
+
                 throw new TranslationException("AI翻訳サーバーへの接続に失敗しました。ネットワーク接続を確認してください。", ex);
             }
             catch (JsonException ex)
             {
-                Debug.WriteLine($"JSON Parsing Error: {ex.Message}");
+                Debug.WriteLine($"JSON パースエラー: {ex.Message}");
+
+                // フォールバックエンジンが利用可能な場合
+                if (_fallbackEngine != null)
+                {
+                    Debug.WriteLine("JSONパースエラーが発生したため、フォールバック翻訳エンジンを使用します");
+                    return await _fallbackEngine.TranslateAsync(text, fromLang, toLang);
+                }
+
                 throw new TranslationException("翻訳結果の解析に失敗しました", ex);
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Translation Error: {ex.Message}");
+                Debug.WriteLine($"翻訳エラー: {ex.Message}");
+
+                // フォールバックエンジンが利用可能な場合
+                if (_fallbackEngine != null)
+                {
+                    Debug.WriteLine("エラーが発生したため、フォールバック翻訳エンジンを使用します");
+                    return await _fallbackEngine.TranslateAsync(text, fromLang, toLang);
+                }
+
                 throw new TranslationException($"AI翻訳処理中にエラーが発生しました: {ex.Message}", ex);
             }
         }
@@ -233,6 +280,15 @@ namespace GameTranslationOverlay.Core.Translation.Services
         public int GetRemainingTokens()
         {
             return _remainingTokens;
+        }
+
+        /// <summary>
+        /// トークン数を再設定する
+        /// </summary>
+        public void ResetTokens(int tokenCount)
+        {
+            _remainingTokens = tokenCount;
+            Debug.WriteLine($"トークン数を再設定しました: {_remainingTokens}");
         }
 
         /// <summary>
