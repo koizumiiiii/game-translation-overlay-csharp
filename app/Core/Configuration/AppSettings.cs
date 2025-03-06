@@ -130,6 +130,11 @@ namespace GameTranslationOverlay.Core.Configuration
         public string EncryptedCustomApiKey { get; set; } = string.Empty;
 
         /// <summary>
+        /// ライセンスキー
+        /// </summary>
+        public string LicenseKey { get; set; } = string.Empty;
+
+        /// <summary>
         /// カスタムAPIキーを取得する
         /// </summary>
         public string GetCustomApiKey()

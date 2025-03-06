@@ -64,6 +64,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Core\Configuration\AppSettings.cs" />
+    <Compile Include="Core\Licensing\LicenseManager.cs" />
     <Compile Include="Core\Models\WindowInfo.cs" />
     <Compile Include="Core\OCR\Benchmark\OcrBenchmark.cs" />
     <Compile Include="Core\OCR\Benchmark\OcrBenchmarkTest.cs" />
