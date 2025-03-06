@@ -8,6 +8,9 @@ using System.Linq;
 using System.IO;
 // 名前空間の衝突を解決するためのエイリアス
 using OCRNamespace = GameTranslationOverlay.Core.OCR;
+using UtilsNamespace = GameTranslationOverlay.Core.Utils;
+// PreprocessingOptionsの名前空間を正しく指定
+using GameTranslationOverlay.Core.Utils;
 // 他の名前空間は通常どおりインポート
 using GameTranslationOverlay.Core.UI;
 using GameTranslationOverlay.Forms;
@@ -15,7 +18,6 @@ using GameTranslationOverlay.Utils;
 using GameTranslationOverlay.Core.Models;
 using GameTranslationOverlay.Core.Translation.Services;
 using GameTranslationOverlay.Core.Translation.Interfaces;
-
 namespace GameTranslationOverlay
 {
     public partial class MainForm : Form
@@ -733,12 +735,11 @@ namespace GameTranslationOverlay
         };
 
                 // 各前処理オプションのテスト
-                var preprocessingOptions = new OCRNamespace.PreprocessingOptions[]
-                {
-            null, // デフォルト（前処理なし）
-            OCRNamespace.ImagePreprocessor.JapaneseTextPreset,
-            OCRNamespace.ImagePreprocessor.EnglishTextPreset,
-            OCRNamespace.ImagePreprocessor.GameTextLightPreset
+                var preprocessingOptions = new UtilsNamespace.PreprocessingOptions[] {
+                    null, // デフォルト（前処理なし）
+                    UtilsNamespace.ImagePreprocessor.JapaneseTextPreset,
+                    UtilsNamespace.ImagePreprocessor.EnglishTextPreset,
+                    UtilsNamespace.ImagePreprocessor.GameTextLightPreset
                 };
 
                 string[] optionNames = { "Default", "Japanese Preset", "English Preset", "Light Preset" };
