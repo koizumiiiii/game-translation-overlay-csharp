@@ -1,365 +1,377 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Drawing;
 using System.Linq;
 using GameTranslationOverlay.Core.OCR;
 
 namespace GameTranslationOverlay.Core.Utils
 {
     /// <summary>
-    /// OCR精度向上のための前処理設定を自動調整するクラス
+    /// OCR精度向上のための適応型前処理と閾値調整を行うユーティリティクラス
     /// </summary>
     public class AdaptivePreprocessor
     {
-        private Dictionary<string, PreprocessingOptions> _gameProfiles = new Dictionary<string, PreprocessingOptions>();
-        private PreprocessingOptions _currentSettings;
-        private string _currentGameName;
+        // 閾値の初期設定
+        private float _baseThreshold = 0.3f;      // 基本閾値
+        private float _currentThreshold = 0.3f;   // 現在の閾値
+        private float _maxThreshold = 0.7f;       // 上限閾値
+
+        // 動的調整用カウンター
+        private int _falsePositiveCount = 0;      // 誤検出カウンター
+        private int _noDetectionCount = 0;        // 未検出カウンター
+        private int _successCount = 0;            // 成功カウンター
+
+        // 前処理設定
+        private PreprocessingOptions _currentPreprocessingOptions;
+        private List<PreprocessingOptions> _presetOptions;
+        private int _currentPresetIndex = 0;
+
+        /// <summary>
+        /// 現在の前処理設定を取得または設定
+        /// </summary>
+        public PreprocessingOptions CurrentPreprocessingOptions
+        {
+            get { return _currentPreprocessingOptions; }
+            set
+            {
+                _currentPreprocessingOptions = value;
+                Debug.WriteLine("前処理設定を外部から変更しました");
+            }
+        }
+
+        // 最適化状態追跡
+        private bool _isOptimizing = false;       // 最適化プロセス実行中フラグ
+        private int _optimizationSteps = 0;       // 最適化ステップ数
+        private const int MAX_OPTIMIZATION_STEPS = 5; // 最大最適化ステップ
+
+        // 状態記録
+        private DateTime _lastAdjustmentTime = DateTime.MinValue;
+        private int _totalDetections = 0;
         private int _successfulDetections = 0;
-        private int _failedDetections = 0;
+
+        /// <summary>
+        /// コンストラクタ
+        /// </summary>
+        public AdaptivePreprocessor()
+        {
+            // プリセット設定を初期化
+            InitializePresets();
+
+            // デフォルトの前処理設定を適用
+            _currentPreprocessingOptions = GetDefaultPreprocessingOptions();
+
+            Debug.WriteLine("AdaptivePreprocessor: 初期化完了");
+        }
+
+        /// <summary>
+        /// プリセット設定を初期化
+        /// </summary>
+        private void InitializePresets()
+        {
+            _presetOptions = new List<PreprocessingOptions>
+            {
+                // プリセット1: 標準設定（コントラスト強調、軽度シャープニング）
+                new PreprocessingOptions
+                {
+                    ApplyContrast = true,
+                    ContrastLevel = 20,
+                    ApplySharpening = true,
+                    SharpeningLevel = 1.2f,
+                    Scale = 1.0f,
+                    PaddingPixels = 4
+                },
+                
+                // プリセット2: 日本語テキスト向け
+                ImagePreprocessor.JapaneseTextPreset,
+                
+                // プリセット3: 英語テキスト向け
+                ImagePreprocessor.EnglishTextPreset,
+                
+                // プリセット4: ダークテーマゲーム向け（明るさ上げ、コントラスト強調）
+                new PreprocessingOptions
+                {
+                    ApplyContrast = true,
+                    ContrastLevel = 30,
+                    ApplyBrightness = true,
+                    BrightnessLevel = 15,
+                    Scale = 1.2f,
+                    PaddingPixels = 4
+                },
+                
+                // プリセット5: 小さいフォント向け（拡大、シャープニング）
+                new PreprocessingOptions
+                {
+                    ApplySharpening = true,
+                    SharpeningLevel = 1.5f,
+                    Scale = 1.5f,
+                    PaddingPixels = 6
+                }
+            };
+        }
+
+        /// <summary>
+        /// 指定された画像に前処理を適用
+        /// </summary>
+        /// <param name="image">元画像</param>
+        /// <returns>前処理済み画像</returns>
+        public Bitmap ApplyPreprocessing(Bitmap image)
+        {
+            if (image == null)
+                return null;
+
+            return ImagePreprocessor.Preprocess(image, _currentPreprocessingOptions);
+        }
+
+        /// <summary>
+        /// 現在の閾値を取得
+        /// </summary>
+        public float GetCurrentThreshold()
+        {
+            return _currentThreshold;
+        }
 
         /// <summary>
         /// 現在の前処理設定を取得
         /// </summary>
-        public PreprocessingOptions GetCurrentSettings()
+        public PreprocessingOptions GetCurrentPreprocessingOptions()
         {
-            return _currentSettings ?? CreateBalancedProcessingOptions();
+            return CurrentPreprocessingOptions;
         }
 
         /// <summary>
-        /// 処理結果に基づいて設定を自動調整
+        /// デフォルトの前処理設定を取得
         /// </summary>
-        /// <param name="detectedRegionsCount">検出されたテキスト領域の数</param>
-        /// <param name="averageConfidence">検出の平均信頼度</param>
-        public void AdjustBasedOnResults(int detectedRegionsCount, float averageConfidence)
-        {
-            if (_currentSettings == null)
-                _currentSettings = CreateBalancedProcessingOptions();
-
-            if (detectedRegionsCount == 0)
-            {
-                _failedDetections++;
-                _successfulDetections = 0;
-
-                // 検出に失敗した場合、より積極的な設定に調整
-                if (_failedDetections >= 3)
-                {
-                    EnhanceSettings();
-                    _failedDetections = 0;
-                    Debug.WriteLine("検出失敗が続いたため、前処理設定を強化しました");
-                }
-            }
-            else
-            {
-                _failedDetections = 0;
-
-                if (averageConfidence > 0.7f)
-                {
-                    _successfulDetections++;
-
-                    // 検出が安定している場合は現在の設定を保存
-                    if (_successfulDetections >= 5 && !string.IsNullOrEmpty(_currentGameName))
-                    {
-                        SaveProfileForGame(_currentGameName, _currentSettings);
-                        _successfulDetections = 0;
-                        Debug.WriteLine($"検出が安定したため、'{_currentGameName}'のプロファイルを保存しました");
-                    }
-                }
-            }
-        }
-
-        /// <summary>
-        /// 実行中のゲームに基づいて設定を自動選択
-        /// </summary>
-        /// <param name="gameExecutableName">ゲーム実行ファイル名</param>
-        public PreprocessingOptions SelectSettingsForGame(string gameExecutableName)
-        {
-            _currentGameName = gameExecutableName;
-
-            // 既存のプロファイルがあればそれを使用
-            if (_gameProfiles.TryGetValue(gameExecutableName, out PreprocessingOptions profile))
-            {
-                _currentSettings = profile;
-                Debug.WriteLine($"'{gameExecutableName}'の保存済みプロファイルを適用しました");
-                return profile;
-            }
-
-            // ない場合はゲームのタイプを推測して設定を選択
-            _currentSettings = GuessOptimalSettingsForGame(gameExecutableName);
-            Debug.WriteLine($"'{gameExecutableName}'の推測プロファイルを適用しました");
-            return _currentSettings;
-        }
-
-        /// <summary>
-        /// ゲームの特性から最適な設定を推測
-        /// </summary>
-        private PreprocessingOptions GuessOptimalSettingsForGame(string gameExecutableName)
-        {
-            string gameName = gameExecutableName.ToLower();
-
-            if (gameName.Contains("rpg") || gameName.Contains("adventure") ||
-                gameName.Contains("story") || gameName.Contains("tale") ||
-                gameName.Contains("fantasy"))
-            {
-                return CreateRpgSettings();
-            }
-            else if (gameName.Contains("fps") || gameName.Contains("shooter") ||
-                     gameName.Contains("battle") || gameName.Contains("war") ||
-                     gameName.Contains("combat"))
-            {
-                return CreateFpsSettings();
-            }
-            else if (gameName.Contains("novel") || gameName.Contains("visual") ||
-                     gameName.Contains("drama") || gameName.Contains("dating") ||
-                     gameName.Contains("sim"))
-            {
-                return CreateVisualNovelSettings();
-            }
-
-            // デフォルト設定
-            return CreateBalancedProcessingOptions();
-        }
-
-        /// <summary>
-        /// より積極的な前処理設定にする
-        /// </summary>
-        private void EnhanceSettings()
-        {
-            if (_currentSettings == null)
-                _currentSettings = CreateBalancedProcessingOptions();
-
-            // コントラストを強化
-            _currentSettings.ApplyContrast = true;
-            _currentSettings.ContrastLevel += 0.1f;
-            if (_currentSettings.ContrastLevel > 1.8f)
-                _currentSettings.ContrastLevel = 1.8f;
-
-            // シャープネスを強化
-            _currentSettings.ApplySharpening = true;
-            _currentSettings.SharpeningLevel += 0.1f;
-            if (_currentSettings.SharpeningLevel > 0.8f)
-                _currentSettings.SharpeningLevel = 0.8f;
-
-            // スケールアップ
-            _currentSettings.Resize = true;
-            _currentSettings.Scale += 0.1f;
-            if (_currentSettings.Scale > 2.0f)
-                _currentSettings.Scale = 2.0f;
-
-            // ノイズ除去を有効化
-            if (!_currentSettings.RemoveNoise)
-            {
-                _currentSettings.RemoveNoise = true;
-                _currentSettings.NoiseReductionLevel = 1;
-            }
-
-            // パディングを追加
-            if (!_currentSettings.AddPadding)
-            {
-                _currentSettings.AddPadding = true;
-                _currentSettings.PaddingPixels = 5;
-            }
-        }
-
-        /// <summary>
-        /// 最小限の前処理設定を作成 (検出感度1)
-        /// </summary>
-        public PreprocessingOptions CreateMinimalProcessingOptions()
+        public static PreprocessingOptions GetDefaultPreprocessingOptions()
         {
             return new PreprocessingOptions
             {
                 ApplyContrast = true,
-                ContrastLevel = 1.1f,
-                ApplyBrightness = false,
-                ApplySharpening = false,
+                ContrastLevel = 20,
+                ApplySharpening = true,
+                SharpeningLevel = 1.2f,
                 RemoveNoise = false,
-                ApplyThreshold = false,
-                Resize = false,
-                AddPadding = true,
-                PaddingPixels = 2
-            };
-        }
-
-        /// <summary>
-        /// 軽めの前処理設定を作成 (検出感度2)
-        /// </summary>
-        public PreprocessingOptions CreateLightProcessingOptions()
-        {
-            return new PreprocessingOptions
-            {
-                ApplyContrast = true,
-                ContrastLevel = 1.2f,
-                ApplyBrightness = false,
-                ApplySharpening = true,
-                SharpeningLevel = 0.2f,
-                RemoveNoise = false,
-                ApplyThreshold = false,
-                Resize = false,
-                AddPadding = true,
-                PaddingPixels = 3
-            };
-        }
-
-        /// <summary>
-        /// バランスの取れた前処理設定を作成 (検出感度3)
-        /// </summary>
-        public PreprocessingOptions CreateBalancedProcessingOptions()
-        {
-            return new PreprocessingOptions
-            {
-                ApplyContrast = true,
-                ContrastLevel = 1.3f,
-                ApplyBrightness = true,
-                BrightnessLevel = 1.05f,
-                ApplySharpening = true,
-                SharpeningLevel = 0.3f,
-                RemoveNoise = true,
-                NoiseReductionLevel = 1,
-                ApplyThreshold = false,
-                Resize = true,
-                Scale = 1.2f,
-                AddPadding = true,
-                PaddingPixels = 5
-            };
-        }
-
-        /// <summary>
-        /// 積極的な前処理設定を作成 (検出感度4)
-        /// </summary>
-        public PreprocessingOptions CreateAggressiveProcessingOptions()
-        {
-            return new PreprocessingOptions
-            {
-                ApplyContrast = true,
-                ContrastLevel = 1.4f,
-                ApplyBrightness = true,
-                BrightnessLevel = 1.1f,
-                ApplySharpening = true,
-                SharpeningLevel = 0.5f,
-                RemoveNoise = true,
-                NoiseReductionLevel = 2,
-                ApplyThreshold = false,
-                Resize = true,
-                Scale = 1.5f,
-                AddPadding = true,
-                PaddingPixels = 8
-            };
-        }
-
-        /// <summary>
-        /// 非常に積極的な前処理設定を作成 (検出感度5)
-        /// </summary>
-        public PreprocessingOptions CreateVeryAggressiveProcessingOptions()
-        {
-            return new PreprocessingOptions
-            {
-                ApplyContrast = true,
-                ContrastLevel = 1.6f,
-                ApplyBrightness = true,
-                BrightnessLevel = 1.15f,
-                ApplySharpening = true,
-                SharpeningLevel = 0.7f,
-                RemoveNoise = true,
-                NoiseReductionLevel = 2,
-                ApplyThreshold = false,
-                Resize = true,
-                Scale = 1.8f,
-                AddPadding = true,
-                PaddingPixels = 10
-            };
-        }
-
-        /// <summary>
-        /// RPGゲーム向けの設定を作成
-        /// </summary>
-        private PreprocessingOptions CreateRpgSettings()
-        {
-            return new PreprocessingOptions
-            {
-                ApplyContrast = true,
-                ContrastLevel = 1.3f,
-                ApplyBrightness = true,
-                BrightnessLevel = 1.05f,
-                ApplySharpening = true,
-                SharpeningLevel = 0.4f,
-                RemoveNoise = true,
-                NoiseReductionLevel = 1,
-                ApplyThreshold = false,
-                Resize = true,
-                Scale = 1.3f,
-                AddPadding = true,
-                PaddingPixels = 6
-            };
-        }
-
-        /// <summary>
-        /// FPSゲーム向けの設定を作成
-        /// </summary>
-        private PreprocessingOptions CreateFpsSettings()
-        {
-            return new PreprocessingOptions
-            {
-                ApplyContrast = true,
-                ContrastLevel = 1.5f,
-                ApplyBrightness = true,
-                BrightnessLevel = 1.1f,
-                ApplySharpening = true,
-                SharpeningLevel = 0.6f,
-                RemoveNoise = false,
-                ApplyThreshold = false,
-                Resize = true,
-                Scale = 1.2f,
-                AddPadding = true,
+                Scale = 1.0f,
                 PaddingPixels = 4
             };
         }
 
         /// <summary>
-        /// ビジュアルノベル向けの設定を作成
+        /// 検出結果に基づいて閾値と前処理設定を調整
         /// </summary>
-        private PreprocessingOptions CreateVisualNovelSettings()
+        /// <param name="detectedRegions">検出されたテキスト領域数</param>
+        /// <param name="userConfirmedFalsePositive">ユーザーが誤検出と確認したかどうか</param>
+        public void AdjustSettings(int detectedRegions, bool userConfirmedFalsePositive = false)
         {
-            return new PreprocessingOptions
+            // 検出統計の更新
+            _totalDetections++;
+            if (detectedRegions > 0)
+                _successfulDetections++;
+
+            // 誤検出のフィードバックがあれば閾値を上げる
+            if (userConfirmedFalsePositive)
             {
-                ApplyContrast = true,
-                ContrastLevel = 1.2f,
-                ApplyBrightness = false,
-                ApplySharpening = true,
-                SharpeningLevel = 0.3f,
-                RemoveNoise = true,
-                NoiseReductionLevel = 1,
-                ApplyThreshold = false,
-                Resize = true,
-                Scale = 1.4f,
-                AddPadding = true,
-                PaddingPixels = 8
-            };
+                _falsePositiveCount++;
+                if (_falsePositiveCount >= 3)
+                {
+                    IncrementThreshold(0.05f);
+                    _falsePositiveCount = 0;
+                    Debug.WriteLine($"誤検出が多いため閾値を上げました: {_currentThreshold:F2}");
+                }
+            }
+
+            // 一定期間検出がなければ閾値を下げる
+            if (detectedRegions == 0)
+            {
+                _noDetectionCount++;
+                _successCount = 0;
+
+                if (_noDetectionCount >= 5)
+                {
+                    // 最適化プロセスを開始
+                    if (!_isOptimizing)
+                    {
+                        StartOptimization();
+                    }
+                    else
+                    {
+                        // 既に最適化中なら次のプリセットに切り替え
+                        TryNextPreset();
+                    }
+
+                    _noDetectionCount = 0;
+                }
+            }
+            else
+            {
+                _noDetectionCount = 0;
+                _successCount++;
+
+                // 連続して成功したら最適化を終了
+                if (_successCount >= 3 && _isOptimizing)
+                {
+                    _isOptimizing = false;
+                    _optimizationSteps = 0;
+                    Debug.WriteLine("検出が安定したため最適化を終了しました");
+                }
+            }
+
+            // 最適化プロセスの進行
+            if (_isOptimizing)
+            {
+                ContinueOptimization(detectedRegions);
+            }
+
+            // 検出率が低い場合は定期的に設定を見直す
+            if (_totalDetections > 20)
+            {
+                float detectionRate = (float)_successfulDetections / _totalDetections;
+                if (detectionRate < 0.4f && (DateTime.Now - _lastAdjustmentTime).TotalMinutes > 2)
+                {
+                    ResetToDefault();
+                    _lastAdjustmentTime = DateTime.Now;
+                    Debug.WriteLine($"検出率が低いため設定をリセットしました（検出率: {detectionRate:P2}）");
+                }
+            }
         }
 
         /// <summary>
-        /// ゲーム向けのプロファイルを保存
+        /// 閾値を増加させる
         /// </summary>
-        private void SaveProfileForGame(string gameName, PreprocessingOptions options)
+        /// <param name="increment">増加量</param>
+        private void IncrementThreshold(float increment)
         {
-            // ディープコピーを作成して保存
-            var copy = new PreprocessingOptions
-            {
-                ApplyContrast = options.ApplyContrast,
-                ContrastLevel = options.ContrastLevel,
-                ApplyBrightness = options.ApplyBrightness,
-                BrightnessLevel = options.BrightnessLevel,
-                ApplySharpening = options.ApplySharpening,
-                SharpeningLevel = options.SharpeningLevel,
-                RemoveNoise = options.RemoveNoise,
-                NoiseReductionLevel = options.NoiseReductionLevel,
-                ApplyThreshold = options.ApplyThreshold,
-                ThresholdLevel = options.ThresholdLevel,
-                Resize = options.Resize,
-                Scale = options.Scale,
-                AddPadding = options.AddPadding,
-                PaddingPixels = options.PaddingPixels
-            };
+            _currentThreshold = Math.Min(_currentThreshold + increment, _maxThreshold);
+        }
 
-            _gameProfiles[gameName] = copy;
+        /// <summary>
+        /// 閾値を減少させる
+        /// </summary>
+        /// <param name="decrement">減少量</param>
+        private void DecrementThreshold(float decrement)
+        {
+            _currentThreshold = Math.Max(_currentThreshold - decrement, _baseThreshold);
+        }
+
+        /// <summary>
+        /// 最適化プロセスを開始
+        /// </summary>
+        private void StartOptimization()
+        {
+            _isOptimizing = true;
+            _optimizationSteps = 0;
+            DecrementThreshold(0.1f); // まず閾値を下げる
+            Debug.WriteLine($"最適化プロセスを開始しました: 閾値を下げて {_currentThreshold:F2} になりました");
+        }
+
+        /// <summary>
+        /// 最適化プロセスを継続
+        /// </summary>
+        /// <param name="detectedRegions">検出されたテキスト領域数</param>
+        private void ContinueOptimization(int detectedRegions)
+        {
+            _optimizationSteps++;
+
+            if (_optimizationSteps >= MAX_OPTIMIZATION_STEPS)
+            {
+                // 最大ステップ数に達したら最適化を終了
+                _isOptimizing = false;
+                _optimizationSteps = 0;
+                ResetToDefault();
+                Debug.WriteLine("最大最適化ステップに達したため設定をリセットしました");
+                return;
+            }
+
+            if (detectedRegions == 0)
+            {
+                // まだ検出されない場合は前処理設定を変更
+                TryNextPreset();
+            }
+        }
+
+        /// <summary>
+        /// 次のプリセットに切り替え
+        /// </summary>
+        public void TryNextPreset()
+        {
+            _currentPresetIndex = (_currentPresetIndex + 1) % _presetOptions.Count;
+            _currentPreprocessingOptions = _presetOptions[_currentPresetIndex];
+            Debug.WriteLine($"前処理プリセットを変更しました: プリセット{_currentPresetIndex + 1}");
+        }
+
+        /// <summary>
+        /// 設定をデフォルトに戻す
+        /// </summary>
+        public void ResetToDefault()
+        {
+            _currentThreshold = _baseThreshold;
+            _currentPreprocessingOptions = GetDefaultPreprocessingOptions();
+            _currentPresetIndex = 0;
+            _falsePositiveCount = 0;
+            _noDetectionCount = 0;
+            _successCount = 0;
+            _isOptimizing = false;
+            _optimizationSteps = 0;
+            Debug.WriteLine("設定をデフォルトに戻しました");
+        }
+
+        /// <summary>
+        /// 統計情報をクリア
+        /// </summary>
+        public void ClearStatistics()
+        {
+            _totalDetections = 0;
+            _successfulDetections = 0;
+        }
+
+        /// <summary>
+        /// 現在の適応状態の概要を文字列で取得
+        /// </summary>
+        public string GetStatusSummary()
+        {
+            float detectionRate = _totalDetections > 0 ? (float)_successfulDetections / _totalDetections : 0;
+
+            return $"閾値: {_currentThreshold:F2}, " +
+                   $"プリセット: {_currentPresetIndex + 1}/{_presetOptions.Count}, " +
+                   $"検出率: {detectionRate:P1}, " +
+                   $"最適化中: {(_isOptimizing ? "はい" : "いいえ")}";
+        }
+
+        /// <summary>
+        /// ゲームプロファイルの設定を適用（将来の拡張用）
+        /// </summary>
+        /// <param name="profileName">プロファイル名</param>
+        public void ApplyGameProfile(string profileName)
+        {
+            // TODO: ゲームプロファイルデータベースから設定を読み込む実装
+            // 現在はデモ用のスタブ実装
+
+            switch (profileName.ToLower())
+            {
+                case "rpg":
+                    _currentPreprocessingOptions = ImagePreprocessor.JapaneseTextPreset;
+                    _currentThreshold = 0.4f;
+                    break;
+
+                case "fps":
+                    _currentPreprocessingOptions = new PreprocessingOptions
+                    {
+                        ApplyContrast = true,
+                        ContrastLevel = 25,
+                        ApplySharpening = true,
+                        SharpeningLevel = 1.3f,
+                        Scale = 1.1f
+                    };
+                    _currentThreshold = 0.5f;
+                    break;
+
+                default:
+                    // デフォルト設定を適用
+                    ResetToDefault();
+                    break;
+            }
+
+            Debug.WriteLine($"ゲームプロファイル '{profileName}' を適用しました");
         }
     }
 }

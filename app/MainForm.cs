@@ -42,7 +42,6 @@ namespace GameTranslationOverlay
         // OCR設定UI要素
         private GroupBox _ocrSettingsGroup;
         private ComboBox _ocrEngineComboBox;
-        private CheckBox _useFallbackCheckBox;
         private CheckBox _usePreprocessingCheckBox;
         private TrackBar _confidenceTrackBar;
         private Label _confidenceLabel;
