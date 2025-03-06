@@ -63,6 +63,7 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Core\Configuration\AppSettings.cs" />
     <Compile Include="Core\Models\WindowInfo.cs" />
     <Compile Include="Core\OCR\Benchmark\OcrBenchmark.cs" />
     <Compile Include="Core\OCR\Benchmark\OcrBenchmarkTest.cs" />
@@ -202,6 +203,9 @@
       <Version>13.0.3</Version>
     </PackageReference>
     <PackageReference Include="PaddleOCRSharp" Version="4.4.0.2" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData">
+      <Version>9.0.2</Version>
+    </PackageReference>
     <PackageReference Include="System.Text.Json">
       <Version>9.0.2</Version>
     </PackageReference>
