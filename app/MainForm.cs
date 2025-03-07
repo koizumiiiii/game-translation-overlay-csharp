@@ -18,6 +18,7 @@ using GameTranslationOverlay.Utils;
 using GameTranslationOverlay.Core.Models;
 using GameTranslationOverlay.Core.Translation.Services;
 using GameTranslationOverlay.Core.Translation.Interfaces;
+using GameTranslationOverlay.Core.Licensing;
 namespace GameTranslationOverlay
 {
     public partial class MainForm : Form
@@ -423,23 +424,22 @@ namespace GameTranslationOverlay
 
                 if (useAI)
                 {
+                    if (!LicenseManager.Instance.HasFeature(PremiumFeature.AiTranslation))
+                    {
+                        MessageBox.Show(
+                            "AI翻訳機能はPro版ライセンスが必要です。",
+                            "ライセンス制限",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning
+                        );
+                        _useAITranslationCheckBox.Checked = false;
+                        return;
+                    }
+
+                    // AI翻訳エンジンがない場合は初期化
                     if (_aiTranslationEngine == null)
                     {
-                        // APIキーが設定されていない場合
-                        if (string.IsNullOrEmpty(_openAiApiKey))
-                        {
-                            MessageBox.Show(
-                                "AI翻訳を使用するにはAPIキーを設定する必要があります。",
-                                "設定エラー",
-                                MessageBoxButtons.OK,
-                                MessageBoxIcon.Warning
-                            );
-                            _useAITranslationCheckBox.Checked = false;
-                            return;
-                        }
-
-                        // AIエンジンの初期化
-                        _aiTranslationEngine = new AITranslationEngine(_openAiApiKey);
+                        _aiTranslationEngine = new AITranslationEngine();
                     }
 
                     // AI翻訳エンジンに切り替え
@@ -522,12 +522,6 @@ namespace GameTranslationOverlay
                 // Libre Translate エンジンの初期化
                 _libreTranslateEngine = new LibreTranslateEngine("http://localhost:5000");
 
-                // AI翻訳エンジンの初期化（APIキーが設定されている場合のみ）
-                if (!string.IsNullOrEmpty(_openAiApiKey))
-                {
-                    _aiTranslationEngine = new AITranslationEngine(_openAiApiKey);
-                }
-
                 // 翻訳マネージャーの初期化
                 _translationManager = new TranslationManager(_libreTranslateEngine);
                 Task.Run(async () =>
@@ -538,6 +532,9 @@ namespace GameTranslationOverlay
                         this.BeginInvoke(new Action(() =>
                         {
                             UpdateStatus("翻訳エンジン初期化完了");
+
+                            // ライセンスに基づいてAI翻訳チェックボックスの状態を設定
+                            UpdateAITranslationCheckboxState();
                         }));
                     }
                     catch (Exception ex)
@@ -561,6 +558,26 @@ namespace GameTranslationOverlay
                 Debug.WriteLine($"Translation services initialization error: {ex.Message}");
                 UpdateStatus($"翻訳サービス初期化エラー: {ex.Message}", true);
             }
+        }
+
+        private void UpdateAITranslationCheckboxState()
+        {
+            bool hasAiFeature = LicenseManager.Instance.HasFeature(PremiumFeature.AiTranslation);
+
+            // ライセンスに基づいてチェックボックスの有効/無効を設定
+            _useAITranslationCheckBox.Enabled = hasAiFeature;
+
+            // ツールチップを設定
+            string tooltipText = hasAiFeature ?
+                "AI翻訳を使用します（Pro版のみ）" :
+                "AI翻訳機能はPro版ライセンスが必要です";
+
+            // ツールチップの設定
+            var toolTip = new ToolTip();
+            toolTip.SetToolTip(_useAITranslationCheckBox, tooltipText);
+
+            // ライセンス情報をステータスに表示
+            UpdateStatus($"ライセンス: {LicenseManager.Instance.CurrentLicenseType}");
         }
 
         private async void InitializeServices()

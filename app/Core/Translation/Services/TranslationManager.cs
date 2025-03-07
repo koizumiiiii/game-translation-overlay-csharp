@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using GameTranslationOverlay.Core.Translation.Interfaces;
 using GameTranslationOverlay.Core.Translation.Exceptions;
 using System.Linq;
+using GameTranslationOverlay.Core.Licensing;
 
 namespace GameTranslationOverlay.Core.Translation.Services
 {
@@ -161,6 +162,31 @@ namespace GameTranslationOverlay.Core.Translation.Services
         public ITranslationEngine GetCurrentEngine()
         {
             return _translationEngine;
+        }
+
+        /// <summary>
+        /// 翻訳エンジンをタイプに基づいて取得または作成
+        /// </summary>
+        public ITranslationEngine GetOrCreateEngine(TranslationEngineType engineType)
+        {
+            switch (engineType)
+            {
+                case TranslationEngineType.AI:
+                    // AI翻訳が使用可能か確認
+                    if (!LicenseManager.Instance.HasFeature(PremiumFeature.AiTranslation))
+                    {
+                        Debug.WriteLine("AI translation feature is not available with current license");
+                        return null;
+                    }
+
+                    // AIエンジンを作成して返す
+                    return new AITranslationEngine();
+
+                case TranslationEngineType.Libre:
+                default:
+                    // 標準の翻訳エンジンを返す
+                    return new LibreTranslateEngine("http://localhost:5000");
+            }
         }
 
         /// <summary>

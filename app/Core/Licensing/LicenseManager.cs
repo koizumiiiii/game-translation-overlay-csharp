@@ -1,62 +1,44 @@
-﻿using System;
+﻿// GameTranslationOverlay/Core/Licensing/LicenseManager.cs
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.RegularExpressions;
 using GameTranslationOverlay.Core.Configuration;
-using GameTranslationOverlay.Core.Security;
 
 namespace GameTranslationOverlay.Core.Licensing
 {
     /// <summary>
-    /// アプリケーションのライセンス状態を管理するクラス
+    /// ライセンスの種類
+    /// </summary>
+    public enum LicenseType
+    {
+        Free = 0,
+        Basic = 1,
+        Pro = 2
+    }
+
+    /// <summary>
+    /// プレミアム機能の種類
+    /// </summary>
+    public enum PremiumFeature
+    {
+        AiTranslation,          // AI翻訳機能
+        UnlimitedTranslations,  // 無制限の翻訳
+        AdvancedSettings,       // 高度な設定
+        CustomProfiles,         // カスタムプロファイル
+        PrioritySupport         // 優先サポート
+    }
+
+    /// <summary>
+    /// ライセンスを管理するクラス
     /// </summary>
     public class LicenseManager
     {
-        // シングルトンインスタンス
         private static LicenseManager _instance;
 
-        // ライセンスタイプの定義
-        public enum LicenseType
-        {
-            Free,       // 無料版
-            Basic,      // Basicプラン
-            Pro         // Proプラン
-        }
-
-        // 有料機能の定義
-        public enum PremiumFeature
-        {
-            AiTranslation,          // AI翻訳
-            UnlimitedTranslations,  // 無制限翻訳
-            AdvancedSettings,       // 詳細設定
-            CustomProfiles,         // カスタムプロファイル
-            PrioritySupport         // 優先サポート
-        }
-
-        // 機能と必要なライセンスのマッピング
-        private readonly Dictionary<PremiumFeature, LicenseType> _featureLicenseMap;
-
-        // 現在のライセンスタイプ
-        private LicenseType _currentLicenseType = LicenseType.Free;
-
-        // ライセンスキーの有効期限
-        private DateTime? _licenseExpiration = null;
-
-        // ライセンス検証状態
-        private bool _isLicenseValid = false;
-
-        // ユーザーID（ライセンスに紐づく）
-        private string _userId = string.Empty;
-
-        // ライセンスキーの署名に使用するハッシュキー
-        private static readonly byte[] _licenseSignatureKey = {
-            0x3A, 0x72, 0xF8, 0x4D, 0x9E, 0xC5, 0x7B, 0x2A,
-            0x1D, 0x6B, 0x5F, 0x89, 0xA3, 0xE7, 0x10, 0x9C
-        };
-
-        // シングルトンアクセサ
+        /// <summary>
+        /// シングルトンインスタンスを取得
+        /// </summary>
         public static LicenseManager Instance
         {
             get
@@ -69,28 +51,35 @@ namespace GameTranslationOverlay.Core.Licensing
             }
         }
 
-        /// <summary>
-        /// コンストラクタ - プライベートにしてシングルトンパターンを強制
-        /// </summary>
-        private LicenseManager()
-        {
-            // 機能と必要なライセンスのマッピングを初期化
-            _featureLicenseMap = new Dictionary<PremiumFeature, LicenseType>
-            {
-                { PremiumFeature.AiTranslation, LicenseType.Pro },
-                { PremiumFeature.UnlimitedTranslations, LicenseType.Basic },
-                { PremiumFeature.AdvancedSettings, LicenseType.Basic },
-                { PremiumFeature.CustomProfiles, LicenseType.Pro },
-                { PremiumFeature.PrioritySupport, LicenseType.Pro }
-            };
+        // 現在のライセンスタイプ
+        private LicenseType _currentLicenseType = LicenseType.Free;
 
-            // 保存されているライセンスキーを検証
-            string licenseKey = AppSettings.Instance.LicenseKey;
-            if (!string.IsNullOrEmpty(licenseKey))
-            {
-                VerifyLicense(licenseKey);
-            }
-        }
+        // ライセンスの有効期限
+        private DateTime _licenseExpiry = DateTime.MinValue;
+
+        // ライセンスの有効性
+        private bool _isLicenseValid = false;
+
+        // ユーザーID（有料ライセンス用）
+        private string _userId = string.Empty;
+
+        // ライセンスキーのパターン（XXXX-XXXX-XXXX-XXXX-XXXX）
+        private readonly Regex _licenseKeyPattern = new Regex(@"^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$");
+
+        // 機能と必要なライセンスのマッピング
+        private readonly Dictionary<PremiumFeature, LicenseType> _featureLicenseMap = new Dictionary<PremiumFeature, LicenseType>
+        {
+            { PremiumFeature.AiTranslation, LicenseType.Pro },
+            { PremiumFeature.UnlimitedTranslations, LicenseType.Basic },
+            { PremiumFeature.AdvancedSettings, LicenseType.Basic },
+            { PremiumFeature.CustomProfiles, LicenseType.Pro },
+            { PremiumFeature.PrioritySupport, LicenseType.Pro }
+        };
+
+        /// <summary>
+        /// デバッグモードの有効/無効
+        /// </summary>
+        public bool DebugModeEnabled => AppSettings.Instance.DebugModeEnabled;
 
         /// <summary>
         /// 現在のライセンスタイプを取得
@@ -100,12 +89,12 @@ namespace GameTranslationOverlay.Core.Licensing
         /// <summary>
         /// ライセンスが有効かどうかを取得
         /// </summary>
-        public bool IsLicenseValid => _isLicenseValid;
+        public bool IsLicenseValid => _isLicenseValid || DebugModeEnabled;
 
         /// <summary>
         /// ライセンスの有効期限を取得
         /// </summary>
-        public DateTime? LicenseExpiration => _licenseExpiration;
+        public DateTime LicenseExpiry => _licenseExpiry;
 
         /// <summary>
         /// ユーザーIDを取得
@@ -113,57 +102,135 @@ namespace GameTranslationOverlay.Core.Licensing
         public string UserId => _userId;
 
         /// <summary>
-        /// ライセンスキーを設定し、検証する
+        /// コンストラクタ
         /// </summary>
-        /// <param name="licenseKey">ライセンスキー</param>
-        /// <returns>ライセンスが有効な場合はtrue</returns>
-        public bool SetLicense(string licenseKey)
+        private LicenseManager()
         {
-            if (string.IsNullOrEmpty(licenseKey))
-            {
-                ResetLicense();
-                return false;
-            }
-
-            bool isValid = VerifyLicense(licenseKey);
-            if (isValid)
-            {
-                // 有効なライセンスキーを設定に保存
-                AppSettings.Instance.LicenseKey = licenseKey;
-                AppSettings.Instance.Save();
-                Debug.WriteLine($"ライセンスキーを保存しました: タイプ={_currentLicenseType}, 有効期限={_licenseExpiration}");
-            }
-            else
-            {
-                Debug.WriteLine("無効なライセンスキーです。");
-            }
-
-            return isValid;
+            // ライセンスを検証
+            VerifyLicense();
         }
 
         /// <summary>
-        /// ライセンスをリセットして無料版に戻す
+        /// ライセンスを検証
         /// </summary>
-        public void ResetLicense()
+        public void VerifyLicense()
+        {
+            try
+            {
+                // 設定からライセンスキーを取得
+                string licenseKey = AppSettings.Instance.LicenseKey;
+
+                // ライセンスキーが空の場合は無料版
+                if (string.IsNullOrEmpty(licenseKey))
+                {
+                    SetFreeVersion();
+                    return;
+                }
+
+                // ライセンスキーの形式を検証
+                if (!_licenseKeyPattern.IsMatch(licenseKey))
+                {
+                    Debug.WriteLine("Invalid license key format");
+                    SetFreeVersion();
+                    return;
+                }
+
+                // ライセンスキーを解析
+                ParseLicenseKey(licenseKey);
+
+                // 有効期限を確認
+                if (_licenseExpiry < DateTime.Now)
+                {
+                    Debug.WriteLine("License has expired");
+                    SetFreeVersion();
+                    return;
+                }
+
+                // ライセンス有効
+                _isLicenseValid = true;
+                Debug.WriteLine($"License verified: Type={_currentLicenseType}, Expiry={_licenseExpiry.ToShortDateString()}, UserId={_userId}");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error verifying license: {ex.Message}");
+                SetFreeVersion();
+            }
+        }
+
+        /// <summary>
+        /// 無料版に設定
+        /// </summary>
+        private void SetFreeVersion()
         {
             _currentLicenseType = LicenseType.Free;
-            _licenseExpiration = null;
+            _licenseExpiry = DateTime.MinValue;
             _isLicenseValid = false;
             _userId = string.Empty;
-
-            // 設定からライセンスキーを削除
-            AppSettings.Instance.LicenseKey = string.Empty;
-            AppSettings.Instance.Save();
-            Debug.WriteLine("ライセンスをリセットしました。無料版に戻ります。");
         }
 
         /// <summary>
-        /// 特定の機能が現在のライセンスで利用可能かどうかをチェック
+        /// ライセンスキーを解析
         /// </summary>
-        /// <param name="feature">チェックする機能</param>
-        /// <returns>機能が利用可能な場合はtrue</returns>
+        private void ParseLicenseKey(string licenseKey)
+        {
+            try
+            {
+                // 実際のプロダクション環境では、より堅牢な検証ロジックを実装する
+                // ここでは簡易版として、キーの一部からライセンスタイプを判定
+
+                // 1番目のブロックに基づいてライセンスタイプを決定
+                string typeBlock = licenseKey.Split('-')[0];
+                char typeChar = typeBlock[0];
+
+                switch (typeChar)
+                {
+                    case 'B':
+                        _currentLicenseType = LicenseType.Basic;
+                        break;
+                    case 'P':
+                        _currentLicenseType = LicenseType.Pro;
+                        break;
+                    default:
+                        _currentLicenseType = LicenseType.Free;
+                        break;
+                }
+
+                // 2番目のブロックから有効期限（月数）を取得
+                string expiryBlock = licenseKey.Split('-')[1];
+                int months;
+                if (int.TryParse(expiryBlock.Substring(0, 2), out months))
+                {
+                    _licenseExpiry = DateTime.Now.AddMonths(months);
+                }
+                else
+                {
+                    // デフォルトは1か月
+                    _licenseExpiry = DateTime.Now.AddMonths(1);
+                }
+
+                // 3番目と4番目のブロックからユーザーIDを生成
+                string userIdBlock1 = licenseKey.Split('-')[2];
+                string userIdBlock2 = licenseKey.Split('-')[3];
+                _userId = $"{userIdBlock1}{userIdBlock2}";
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error parsing license key: {ex.Message}");
+                SetFreeVersion();
+            }
+        }
+
+        /// <summary>
+        /// 指定された機能が使用可能かどうかを確認
+        /// </summary>
         public bool HasFeature(PremiumFeature feature)
         {
+            // デバッグモードの場合は常に機能を有効にする
+            if (DebugModeEnabled)
+            {
+                return true;
+            }
+
             // ライセンスが無効の場合は機能へのアクセスを拒否
             if (!_isLicenseValid && _currentLicenseType != LicenseType.Free)
             {
@@ -182,205 +249,85 @@ namespace GameTranslationOverlay.Core.Licensing
         }
 
         /// <summary>
-        /// AI翻訳機能が利用可能かどうかをチェック
+        /// ライセンスキーを設定
         /// </summary>
-        /// <returns>AI翻訳が利用可能な場合はtrue</returns>
-        public bool CanUseAiTranslation()
-        {
-            return HasFeature(PremiumFeature.AiTranslation);
-        }
-
-        /// <summary>
-        /// デバッグモード中はAI翻訳機能をオーバーライドして有効にするかどうか
-        /// </summary>
-        /// <returns>デバッグモードでオーバーライドされる場合はtrue</returns>
-        public bool IsAiTranslationOverridden()
-        {
-            return AppSettings.Instance.DebugModeEnabled && AppSettings.Instance.UseAITranslation;
-        }
-
-        /// <summary>
-        /// 無制限翻訳機能が利用可能かどうかをチェック
-        /// </summary>
-        /// <returns>無制限翻訳が利用可能な場合はtrue</returns>
-        public bool HasUnlimitedTranslations()
-        {
-            return HasFeature(PremiumFeature.UnlimitedTranslations);
-        }
-
-        /// <summary>
-        /// ライセンスキーを検証する
-        /// </summary>
-        /// <param name="licenseKey">検証するライセンスキー</param>
-        /// <returns>ライセンスが有効な場合はtrue</returns>
-        private bool VerifyLicense(string licenseKey)
+        public bool SetLicenseKey(string licenseKey)
         {
             try
             {
-                // ライセンスキーのフォーマットをチェック
-                if (!IsValidLicenseFormat(licenseKey))
-                {
-                    Debug.WriteLine("ライセンスキーのフォーマットが無効です。");
-                    _isLicenseValid = false;
-                    return false;
-                }
+                // ライセンスキーを保存
+                AppSettings.Instance.LicenseKey = licenseKey;
+                AppSettings.Instance.SaveSettings();
 
-                // ライセンスキーを解析
-                var licenseData = ParseLicenseKey(licenseKey);
-                if (licenseData == null)
-                {
-                    Debug.WriteLine("ライセンスキーの解析に失敗しました。");
-                    _isLicenseValid = false;
-                    return false;
-                }
+                // ライセンスを再検証
+                VerifyLicense();
 
-                // ライセンスデータを展開
-                _currentLicenseType = licenseData.Item1;
-                _licenseExpiration = licenseData.Item2;
-                _userId = licenseData.Item3;
-
-                // 有効期限をチェック
-                if (_licenseExpiration.HasValue && _licenseExpiration.Value < DateTime.Now)
-                {
-                    Debug.WriteLine($"ライセンスの有効期限が切れています: {_licenseExpiration.Value}");
-                    _isLicenseValid = false;
-                    return false;
-                }
-
-                _isLicenseValid = true;
-                Debug.WriteLine($"ライセンスキーの検証に成功しました: タイプ={_currentLicenseType}, 有効期限={_licenseExpiration}, ユーザーID={_userId}");
-                return true;
+                return _isLicenseValid;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"ライセンスキーの検証中にエラーが発生しました: {ex.Message}");
-                _isLicenseValid = false;
+                Debug.WriteLine($"Error setting license key: {ex.Message}");
                 return false;
             }
         }
 
         /// <summary>
-        /// ライセンスキーのフォーマットが有効かどうかをチェック
+        /// ライセンスキーを生成（開発・テスト用）
         /// </summary>
-        /// <param name="licenseKey">チェックするライセンスキー</param>
-        /// <returns>フォーマットが有効な場合はtrue</returns>
-        private bool IsValidLicenseFormat(string licenseKey)
+        public string GenerateLicenseKey(LicenseType type, int months)
         {
-            // フォーマット: XXXX-XXXX-XXXX-XXXX-XXXX (Xは英数字)
-            // 実際のアプリケーションではより複雑なフォーマットを使用することを推奨
-            return !string.IsNullOrEmpty(licenseKey) &&
-                   Regex.IsMatch(licenseKey, @"^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$");
+            if (!DebugModeEnabled)
+            {
+                throw new InvalidOperationException("License key generation is only available in debug mode");
+            }
+
+            Random random = new Random();
+
+            // ライセンスタイプ部分
+            string typePrefix;
+            switch (type)
+            {
+                case LicenseType.Basic:
+                    typePrefix = "B";
+                    break;
+                case LicenseType.Pro:
+                    typePrefix = "P";
+                    break;
+                default:
+                    typePrefix = "F";
+                    break;
+            }
+
+            // ランダムな文字を追加
+            string block1 = typePrefix + GetRandomString(random, 3);
+
+            // 有効期限（月数）
+            string block2 = months.ToString("00") + GetRandomString(random, 2);
+
+            // ユーザーID部分
+            string block3 = GetRandomString(random, 4);
+            string block4 = GetRandomString(random, 4);
+
+            // チェックサム（簡易版）
+            string block5 = GetRandomString(random, 4);
+
+            return $"{block1}-{block2}-{block3}-{block4}-{block5}";
         }
 
         /// <summary>
-        /// ライセンスキーを解析し、ライセンス情報を取得
+        /// ランダムな文字列を生成
         /// </summary>
-        /// <param name="licenseKey">解析するライセンスキー</param>
-        /// <returns>ライセンスタイプ、有効期限、ユーザーIDのタプル。解析失敗時はnull</returns>
-        private Tuple<LicenseType, DateTime?, string> ParseLicenseKey(string licenseKey)
+        private string GetRandomString(Random random, int length)
         {
-            try
+            const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+            char[] result = new char[length];
+
+            for (int i = 0; i < length; i++)
             {
-                // ハイフンを除去
-                string keyWithoutHyphens = licenseKey.Replace("-", "");
-
-                // Base64エンコードされた部分を取得（最初の16文字はハッシュ用に予約）
-                string encodedData = keyWithoutHyphens.Substring(0, 16);
-
-                // シンプルな例として、最初の文字からライセンスタイプを判定
-                // 実際のアプリケーションではより堅牢な方法を使用することを推奨
-                char typeChar = encodedData[0];
-                LicenseType licenseType = LicenseType.Free;
-
-                switch (typeChar)
-                {
-                    case 'B':
-                        licenseType = LicenseType.Basic;
-                        break;
-                    case 'P':
-                        licenseType = LicenseType.Pro;
-                        break;
-                }
-
-                // 有効期限（例として現在から1年後）
-                DateTime? expiration = DateTime.Now.AddYears(1);
-
-                // ユーザーID（例として簡易的な実装）
-                string userId = $"USER-{encodedData.Substring(1, 8)}";
-
-                return new Tuple<LicenseType, DateTime?, string>(licenseType, expiration, userId);
+                result[i] = chars[random.Next(chars.Length)];
             }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"ライセンスキーの解析中にエラーが発生しました: {ex.Message}");
-                return null;
-            }
-        }
 
-        /// <summary>
-        /// ライセンスキーを生成する（開発用・テスト用）
-        /// </summary>
-        /// <param name="licenseType">ライセンスタイプ</param>
-        /// <param name="validityDays">有効期間（日数）</param>
-        /// <returns>生成されたライセンスキー</returns>
-        public static string GenerateLicenseKey(LicenseType licenseType, int validityDays = 365)
-        {
-            try
-            {
-                // タイプに基づく接頭辞
-                char typePrefix;
-                switch (licenseType)
-                {
-                    case LicenseType.Basic:
-                        typePrefix = 'B';
-                        break;
-                    case LicenseType.Pro:
-                        typePrefix = 'P';
-                        break;
-                    default:
-                        typePrefix = 'F';
-                        break;
-                }
-
-                // ランダムなユーザーID部分
-                byte[] randomBytes = new byte[8];
-                using (var rng = RandomNumberGenerator.Create())
-                {
-                    rng.GetBytes(randomBytes);
-                }
-                string randomPart = BitConverter.ToString(randomBytes).Replace("-", "");
-
-                // 有効期限
-                DateTime expiration = DateTime.Now.AddDays(validityDays);
-                string expirationString = expiration.ToString("yyyyMMdd");
-
-                // キーの構成部分
-                string keyData = $"{typePrefix}{randomPart.Substring(0, 8)}{expirationString}";
-
-                // キーを5つのグループに分割してフォーマット
-                string formattedKey = string.Empty;
-                for (int i = 0; i < keyData.Length; i += 4)
-                {
-                    if (i + 4 <= keyData.Length)
-                    {
-                        formattedKey += keyData.Substring(i, 4) + "-";
-                    }
-                    else
-                    {
-                        formattedKey += keyData.Substring(i);
-                    }
-                }
-
-                // 末尾のハイフンを削除
-                formattedKey = formattedKey.TrimEnd('-');
-
-                return formattedKey;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"ライセンスキー生成中にエラーが発生しました: {ex.Message}");
-                return string.Empty;
-            }
+            return new string(result);
         }
     }
 }
