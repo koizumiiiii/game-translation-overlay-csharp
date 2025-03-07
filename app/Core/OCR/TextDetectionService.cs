@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using GameTranslationOverlay.Core.OCR;
 using GameTranslationOverlay.Core.Translation.Services;
+using GameTranslationOverlay.Core.Utils;
 using GameTranslationOverlay.Utils;
 
 namespace GameTranslationOverlay.Core.OCR
@@ -28,6 +29,10 @@ namespace GameTranslationOverlay.Core.OCR
         private List<TextRegion> _detectedRegions = new List<TextRegion>();
         private IntPtr _targetWindowHandle;
         private float _minimumConfidence = 0.6f; // 最低信頼度（これより低いテキストは無視）
+
+        // 差分検出関連
+        private readonly DifferenceDetector _differenceDetector;
+        private bool _useDifferenceDetection = true;
 
         // 状態管理
         private bool _disposed = false;
@@ -98,6 +103,9 @@ namespace GameTranslationOverlay.Core.OCR
             };
             _detectionTimer.Tick += DetectionTimer_Tick;
 
+            // 差分検出器の初期化
+            _differenceDetector = new DifferenceDetector();
+
             Debug.WriteLine("TextDetectionService: 初期化されました");
         }
 
@@ -129,6 +137,16 @@ namespace GameTranslationOverlay.Core.OCR
         {
             _useChangeDetection = enable;
             Debug.WriteLine($"テキスト変更検知を {(_useChangeDetection ? "有効" : "無効")} にしました");
+        }
+
+        /// <summary>
+        /// 差分検出の有効/無効を設定
+        /// </summary>
+        /// <param name="enable">有効にする場合はtrue</param>
+        public void EnableDifferenceDetection(bool enable)
+        {
+            _useDifferenceDetection = enable;
+            Debug.WriteLine($"差分検出を {(_useDifferenceDetection ? "有効" : "無効")} にしました");
         }
 
         /// <summary>
@@ -238,69 +256,102 @@ namespace GameTranslationOverlay.Core.OCR
                         return;
                     }
 
-                    // テキスト領域の検出
-                    var regions = await _ocrEngine.DetectTextRegionsAsync(windowCapture);
-
-                    // 最低信頼度でフィルタリング
-                    regions = regions.Where(r => r.Confidence >= _minimumConfidence).ToList();
-
-                    // 前回と今回の検出結果を比較
-                    bool hadRegionsBefore = _detectedRegions.Count > 0;
-                    bool hasRegionsNow = regions.Count > 0;
-
-                    // スクリーン座標に変換
-                    if (hasRegionsNow)
+                    // 差分検出（有効な場合のみ）
+                    bool hasChange = true;
+                    if (_useDifferenceDetection)
                     {
-                        // テキスト内容の連結（変更検出用）
-                        string currentText = string.Join(" ", regions.Select(r => r.Text));
+                        hasChange = _differenceDetector.HasSignificantChange(windowCapture);
+                    }
 
-                        // 言語の検出と最適化
-                        OptimizeForLanguage(regions);
+                    // 差分がある場合のみOCR処理を実行
+                    if (hasChange)
+                    {
+                        // テキスト領域の検出
+                        var regions = await _ocrEngine.DetectTextRegionsAsync(windowCapture);
 
-                        foreach (var region in regions)
+                        // 最低信頼度でフィルタリング
+                        regions = regions.Where(r => r.Confidence >= _minimumConfidence).ToList();
+
+                        // 前回と今回の検出結果を比較
+                        bool hadRegionsBefore = _detectedRegions.Count > 0;
+                        bool hasRegionsNow = regions.Count > 0;
+
+                        // スクリーン座標に変換
+                        if (hasRegionsNow)
                         {
-                            // キャプチャ内の相対座標からスクリーン座標に変換
-                            region.Bounds = new Rectangle(
-                                windowRect.Left + region.Bounds.X,
-                                windowRect.Top + region.Bounds.Y,
-                                region.Bounds.Width,
-                                region.Bounds.Height);
-                        }
+                            // テキスト内容の連結（変更検出用）
+                            string currentText = string.Join(" ", regions.Select(r => r.Text));
 
-                        // テキスト変更の検出
-                        bool textChanged = !currentText.Equals(_lastDetectedText);
+                            // 言語の検出と最適化
+                            OptimizeForLanguage(regions);
 
-                        // テキスト変更検知が有効で、変更があった場合のみ通知
-                        if (!_useChangeDetection || textChanged)
-                        {
-                            // 検出結果を保存
-                            _detectedRegions = regions;
-                            _noRegionsDetectedCount = 0;
-                            _consecutiveErrors = 0;
-
-                            // 結果を通知
-                            Debug.WriteLine($"{regions.Count}個のテキスト領域を検出しました");
-                            OnRegionsDetected?.Invoke(this, regions);
-
-                            // テキスト変更時刻を更新
-                            if (textChanged)
+                            foreach (var region in regions)
                             {
-                                _lastTextChangeTime = DateTime.Now;
-                                _lastDetectedText = currentText;
+                                // キャプチャ内の相対座標からスクリーン座標に変換
+                                region.Bounds = new Rectangle(
+                                    windowRect.Left + region.Bounds.X,
+                                    windowRect.Top + region.Bounds.Y,
+                                    region.Bounds.Width,
+                                    region.Bounds.Height);
+                            }
 
-                                // 間隔を短くする（テキストが変わった = アクティブな状態）
-                                if (_dynamicIntervalEnabled)
+                            // テキスト変更の検出
+                            bool textChanged = !currentText.Equals(_lastDetectedText);
+
+                            // テキスト変更検知が有効で、変更があった場合のみ通知
+                            if (!_useChangeDetection || textChanged)
+                            {
+                                // 検出結果を保存
+                                _detectedRegions = regions;
+                                _noRegionsDetectedCount = 0;
+                                _consecutiveErrors = 0;
+
+                                // 結果を通知
+                                Debug.WriteLine($"{regions.Count}個のテキスト領域を検出しました");
+                                OnRegionsDetected?.Invoke(this, regions);
+
+                                // テキスト変更時刻を更新
+                                if (textChanged)
                                 {
-                                    AdjustIntervalForActivity(true);
+                                    _lastTextChangeTime = DateTime.Now;
+                                    _lastDetectedText = currentText;
+
+                                    // 間隔を短くする（テキストが変わった = アクティブな状態）
+                                    if (_dynamicIntervalEnabled)
+                                    {
+                                        AdjustIntervalForActivity(true);
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                Debug.WriteLine("テキストに変更がないため通知をスキップします");
+
+                                // 長時間変化がない場合は間隔を長くする
+                                if (_dynamicIntervalEnabled && (DateTime.Now - _lastTextChangeTime).TotalSeconds > 10)
+                                {
+                                    AdjustIntervalForActivity(false);
                                 }
                             }
                         }
                         else
                         {
-                            Debug.WriteLine("テキストに変更がないため通知をスキップします");
+                            // テキスト領域が検出されなかった
+                            Debug.WriteLine("テキスト領域は検出されませんでした");
+                            _noRegionsDetectedCount++;
 
-                            // 長時間変化がない場合は間隔を長くする
-                            if (_dynamicIntervalEnabled && (DateTime.Now - _lastTextChangeTime).TotalSeconds > 10)
+                            // しきい値を超えて検出されなかった場合
+                            if (hadRegionsBefore && _noRegionsDetectedCount >= NO_REGIONS_THRESHOLD)
+                            {
+                                _detectedRegions.Clear();
+                                _lastDetectedText = string.Empty;
+                                OnNoRegionsDetected?.Invoke(this, EventArgs.Empty);
+                                Debug.WriteLine($"テキスト領域が{NO_REGIONS_THRESHOLD}回連続で検出されなかったため、クリーンアップイベントを発行します");
+                                _noRegionsDetectedCount = 0;
+                            }
+
+                            // 動的間隔調整（テキストがない = 非アクティブな状態）
+                            if (_dynamicIntervalEnabled)
                             {
                                 AdjustIntervalForActivity(false);
                             }
@@ -308,21 +359,7 @@ namespace GameTranslationOverlay.Core.OCR
                     }
                     else
                     {
-                        // テキスト領域が検出されなかった
-                        Debug.WriteLine("テキスト領域は検出されませんでした");
-                        _noRegionsDetectedCount++;
-
-                        // しきい値を超えて検出されなかった場合
-                        if (hadRegionsBefore && _noRegionsDetectedCount >= NO_REGIONS_THRESHOLD)
-                        {
-                            _detectedRegions.Clear();
-                            _lastDetectedText = string.Empty;
-                            OnNoRegionsDetected?.Invoke(this, EventArgs.Empty);
-                            Debug.WriteLine($"テキスト領域が{NO_REGIONS_THRESHOLD}回連続で検出されなかったため、クリーンアップイベントを発行します");
-                            _noRegionsDetectedCount = 0;
-                        }
-
-                        // 動的間隔調整（テキストがない = 非アクティブな状態）
+                        // 差分がない場合は間隔を徐々に長くする（非アクティブ状態と判断）
                         if (_dynamicIntervalEnabled)
                         {
                             AdjustIntervalForActivity(false);
@@ -479,6 +516,9 @@ namespace GameTranslationOverlay.Core.OCR
                         _detectionTimer.Dispose();
                         _detectionTimer = null;
                     }
+
+                    // 差分検出器の破棄
+                    _differenceDetector?.Dispose();
                 }
 
                 // アンマネージドリソースの破棄（必要に応じて）
