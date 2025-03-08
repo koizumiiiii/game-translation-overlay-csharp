@@ -1,5 +1,4 @@
-﻿// /app/Core/Utils/AdaptiveDetectionInterval.cs
-using System;
+﻿using System;
 using System.Diagnostics;
 
 namespace GameTranslationOverlay.Core.Utils
