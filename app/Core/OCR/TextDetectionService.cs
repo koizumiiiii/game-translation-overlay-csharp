@@ -59,6 +59,9 @@ namespace GameTranslationOverlay.Core.OCR
 
         private readonly AdaptiveDetectionInterval _adaptiveInterval;
 
+        private readonly SmartOcrRegionManager _regionManager;
+        private bool _useSmartRegions = true;
+
 
         /// <summary>
         /// 翻訳先言語の設定（最適化のため）
@@ -112,7 +115,27 @@ namespace GameTranslationOverlay.Core.OCR
             // アダプティブ間隔調整の初期化
             _adaptiveInterval = new AdaptiveDetectionInterval(_minDetectionInterval, _maxDetectionInterval, _detectionInterval);
 
+            // スマートOCR領域マネージャーの初期化
+            _regionManager = new SmartOcrRegionManager(new Size(3, 3), 3, 5);
+
             Debug.WriteLine("TextDetectionService: 初期化されました");
+        }
+
+        // スマート領域検出の有効/無効を切り替えるメソッドを追加
+        /// <summary>
+        /// スマート領域検出の有効/無効を設定
+        /// </summary>
+        /// <param name="enable">有効にする場合はtrue</param>
+        public void EnableSmartRegions(bool enable)
+        {
+            _useSmartRegions = enable;
+            Debug.WriteLine($"スマート領域検出を {(_useSmartRegions ? "有効" : "無効")} にしました");
+
+            // 無効化した場合は領域マネージャーをリセット
+            if (!enable)
+            {
+                _regionManager.Reset();
+            }
         }
 
         /// <summary>
@@ -251,7 +274,7 @@ namespace GameTranslationOverlay.Core.OCR
                     return;
                 }
 
-                // ウィンドウ領域をキャプチャ
+                // ウィンドウ全体をキャプチャ
                 using (Bitmap windowCapture = ScreenCapture.CaptureWindow(_targetWindowHandle))
                 {
                     if (windowCapture == null)
@@ -261,6 +284,9 @@ namespace GameTranslationOverlay.Core.OCR
                         _consecutiveErrors++;
                         return;
                     }
+
+                    // ResourceManagerにビットマップを追跡させる
+                    ResourceManager.TrackResource(windowCapture);
 
                     // 差分検出（有効な場合のみ）
                     bool hasChange = true;
@@ -272,33 +298,114 @@ namespace GameTranslationOverlay.Core.OCR
                     // 差分がある場合のみOCR処理を実行
                     if (hasChange)
                     {
-                        // テキスト領域の検出
-                        var regions = await _ocrEngine.DetectTextRegionsAsync(windowCapture);
+                        List<TextRegion> allRegions = new List<TextRegion>();
+
+                        // スマート領域検出を使用するかどうかで処理を分岐
+                        if (_useSmartRegions)
+                        {
+                            // アクティブな領域のみを処理
+                            List<Rectangle> regionsToProcess = _regionManager.GetActiveRegions();
+
+                            // 初回または有力な領域がない場合は全画面処理
+                            if (regionsToProcess.Count == 0 || regionsToProcess.Count == 1 && regionsToProcess[0].Equals(windowRect))
+                            {
+                                Debug.WriteLine("アクティブな領域がないため、全画面処理を実行します");
+                                var regions = await _ocrEngine.DetectTextRegionsAsync(windowCapture);
+
+                                // 領域マネージャーを更新
+                                _regionManager.UpdateRegions(windowRect, regions);
+                                allRegions.AddRange(regions);
+                            }
+                            else
+                            {
+                                Debug.WriteLine($"{regionsToProcess.Count}個のアクティブ領域を処理します");
+
+                                // 各アクティブ領域を個別に処理
+                                foreach (var region in regionsToProcess)
+                                {
+                                    // 領域がウィンドウ内に収まるように調整
+                                    Rectangle safeRegion = new Rectangle(
+                                        Math.Max(0, region.X - windowRect.X),
+                                        Math.Max(0, region.Y - windowRect.Y),
+                                        Math.Min(windowCapture.Width - (region.X - windowRect.X), region.Width),
+                                        Math.Min(windowCapture.Height - (region.Y - windowRect.Y), region.Height)
+                                    );
+
+                                    // 有効なサイズかチェック
+                                    if (safeRegion.Width <= 0 || safeRegion.Height <= 0)
+                                    {
+                                        continue;
+                                    }
+
+                                    // 部分画像を切り出し
+                                    using (Bitmap regionBitmap = new Bitmap(safeRegion.Width, safeRegion.Height))
+                                    {
+                                        ResourceManager.TrackResource(regionBitmap);
+
+                                        // 部分画像を作成
+                                        using (Graphics g = Graphics.FromImage(regionBitmap))
+                                        {
+                                            g.DrawImage(windowCapture,
+                                                new Rectangle(0, 0, safeRegion.Width, safeRegion.Height),
+                                                safeRegion,
+                                                GraphicsUnit.Pixel);
+                                        }
+
+                                        // OCR処理
+                                        var regionTexts = await _ocrEngine.DetectTextRegionsAsync(regionBitmap);
+
+                                        // 座標を元のウィンドウ座標に変換
+                                        foreach (var text in regionTexts)
+                                        {
+                                            text.Bounds = new Rectangle(
+                                                text.Bounds.X + (region.X - windowRect.X),
+                                                text.Bounds.Y + (region.Y - windowRect.Y),
+                                                text.Bounds.Width,
+                                                text.Bounds.Height
+                                            );
+                                        }
+
+                                        allRegions.AddRange(regionTexts);
+
+                                        // リソース解放
+                                        ResourceManager.ReleaseResource(regionBitmap);
+                                    }
+                                }
+
+                                // 領域マネージャーを更新
+                                _regionManager.UpdateRegions(windowRect, allRegions);
+                            }
+                        }
+                        else
+                        {
+                            // 従来の方法（全画面処理）
+                            allRegions = await _ocrEngine.DetectTextRegionsAsync(windowCapture);
+                        }
 
                         // 最低信頼度でフィルタリング
-                        regions = regions.Where(r => r.Confidence >= _minimumConfidence).ToList();
+                        allRegions = allRegions.Where(r => r.Confidence >= _minimumConfidence).ToList();
 
                         // アダプティブ間隔の更新
                         if (_dynamicIntervalEnabled)
                         {
-                            _adaptiveInterval.UpdateInterval(hasChange, regions.Count > 0);
+                            _adaptiveInterval.UpdateInterval(hasChange, allRegions.Count > 0);
                             DetectionInterval = _adaptiveInterval.GetCurrentInterval();
                         }
 
                         // 前回と今回の検出結果を比較
                         bool hadRegionsBefore = _detectedRegions.Count > 0;
-                        bool hasRegionsNow = regions.Count > 0;
+                        bool hasRegionsNow = allRegions.Count > 0;
 
                         // スクリーン座標に変換
                         if (hasRegionsNow)
                         {
                             // テキスト内容の連結（変更検出用）
-                            string currentText = string.Join(" ", regions.Select(r => r.Text));
+                            string currentText = string.Join(" ", allRegions.Select(r => r.Text));
 
                             // 言語の検出と最適化
-                            OptimizeForLanguage(regions);
+                            OptimizeForLanguage(allRegions);
 
-                            foreach (var region in regions)
+                            foreach (var region in allRegions)
                             {
                                 // キャプチャ内の相対座標からスクリーン座標に変換
                                 region.Bounds = new Rectangle(
@@ -315,13 +422,13 @@ namespace GameTranslationOverlay.Core.OCR
                             if (!_useChangeDetection || textChanged)
                             {
                                 // 検出結果を保存
-                                _detectedRegions = regions;
+                                _detectedRegions = allRegions;
                                 _noRegionsDetectedCount = 0;
                                 _consecutiveErrors = 0;
 
                                 // 結果を通知
-                                Debug.WriteLine($"{regions.Count}個のテキスト領域を検出しました");
-                                OnRegionsDetected?.Invoke(this, regions);
+                                Debug.WriteLine($"{allRegions.Count}個のテキスト領域を検出しました");
+                                OnRegionsDetected?.Invoke(this, allRegions);
 
                                 // テキスト変更時刻を更新
                                 if (textChanged)
@@ -379,6 +486,9 @@ namespace GameTranslationOverlay.Core.OCR
                             DetectionInterval = _adaptiveInterval.GetCurrentInterval();
                         }
                     }
+
+                    // リソース解放を促進
+                    ResourceManager.ReleaseResource(windowCapture);
                 }
             }
             catch (Exception ex)
@@ -551,6 +661,9 @@ namespace GameTranslationOverlay.Core.OCR
 
                     // 差分検出器の破棄
                     _differenceDetector?.Dispose();
+
+                    // 領域マネージャーをリセット
+                    _regionManager?.Reset();
                 }
 
                 // アンマネージドリソースの破棄（必要に応じて）
