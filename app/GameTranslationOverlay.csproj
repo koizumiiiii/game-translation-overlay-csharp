@@ -89,6 +89,7 @@
     <Compile Include="Core\Translation\Services\TranslationManager.cs" />
     <Compile Include="Core\Translation\Utils\ErrorHandlingExtensions.cs" />
     <Compile Include="Core\UI\WindowSelector.cs" />
+    <Compile Include="Core\Utils\AdaptiveDetectionInterval.cs" />
     <Compile Include="Core\Utils\AdaptivePreprocessor.cs" />
     <Compile Include="Core\Utils\DifferenceDetector.cs" />
     <Compile Include="Core\Utils\ImagePreprocessor.cs" />

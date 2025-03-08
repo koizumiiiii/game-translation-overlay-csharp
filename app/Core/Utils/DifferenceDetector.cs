@@ -105,19 +105,25 @@ namespace GameTranslationOverlay.Core.Utils
         /// </summary>
         private double CalculateFastDifference(Bitmap current, Bitmap previous)
         {
+            // 画像のピクセルフォーマットを統一（比較のため）
+            if (current.PixelFormat != previous.PixelFormat)
+            {
+                // フォーマットが一致しない場合は、コピーを作成して一致させる
+                using (Bitmap temp = new Bitmap(previous.Width, previous.Height, PixelFormat.Format32bppArgb))
+                {
+                    using (Graphics g = Graphics.FromImage(temp))
+                    {
+                        g.DrawImage(previous, 0, 0, previous.Width, previous.Height);
+                    }
+                    previous = temp;
+                }
+            }
+
             // Rectangle構造体でビットマップ全体を指定
             Rectangle rect = new Rectangle(0, 0, current.Width, current.Height);
 
-            // ピクセルデータへのアクセスをロック
-            BitmapData currentData = current.LockBits(rect, ImageLockMode.ReadOnly, current.PixelFormat);
-            BitmapData previousData = previous.LockBits(rect, ImageLockMode.ReadOnly, previous.PixelFormat);
-
             try
             {
-                // ビットマップのピクセルフォーマットに基づいてバイト数を計算
-                int bytesPerPixel = Image.GetPixelFormatSize(current.PixelFormat) / 8;
-                int stride = currentData.Stride;
-
                 // サンプリングのステップサイズを計算
                 int stepX = Math.Max(1, current.Width / _sampleSize);
                 int stepY = Math.Max(1, current.Height / _sampleSize);
@@ -126,44 +132,38 @@ namespace GameTranslationOverlay.Core.Utils
                 int differentPixels = 0;
                 int totalSamples = 0;
 
-                unsafe
+                // GetPixelを使用した安全な実装（パフォーマンスは劣るが安全）
+                for (int y = 0; y < current.Height; y += stepY)
                 {
-                    // アンセーフコードでポインタを使用して高速アクセス
-                    byte* currentPtr = (byte*)currentData.Scan0;
-                    byte* previousPtr = (byte*)previousData.Scan0;
-
-                    // サンプリングポイントで差分チェック
-                    for (int y = 0; y < current.Height; y += stepY)
+                    for (int x = 0; x < current.Width; x += stepX)
                     {
-                        for (int x = 0; x < current.Width; x += stepX)
+                        // ピクセルの取得
+                        Color currentPixel = current.GetPixel(x, y);
+                        Color previousPixel = previous.GetPixel(x, y);
+
+                        // 各色チャネルの差分を計算
+                        int rDiff = Math.Abs(currentPixel.R - previousPixel.R);
+                        int gDiff = Math.Abs(currentPixel.G - previousPixel.G);
+                        int bDiff = Math.Abs(currentPixel.B - previousPixel.B);
+
+                        // 色差の合計が閾値を超えていれば異なるピクセルとみなす
+                        if (rDiff + gDiff + bDiff > 30)
                         {
-                            // 現在のピクセル位置を計算
-                            int position = y * stride + x * bytesPerPixel;
-
-                            // 各色チャネルの差分を計算
-                            int bDiff = Math.Abs(currentPtr[position] - previousPtr[position]);
-                            int gDiff = Math.Abs(currentPtr[position + 1] - previousPtr[position + 1]);
-                            int rDiff = Math.Abs(currentPtr[position + 2] - previousPtr[position + 2]);
-
-                            // 色差の合計が閾値を超えていれば異なるピクセルとみなす
-                            if (bDiff + gDiff + rDiff > 30)
-                            {
-                                differentPixels++;
-                            }
-
-                            totalSamples++;
+                            differentPixels++;
                         }
+
+                        totalSamples++;
                     }
                 }
 
                 // 異なるピクセルの割合を計算して返す
                 return (double)differentPixels / totalSamples;
             }
-            finally
+            catch (Exception ex)
             {
-                // アンロックを確実に行う
-                current.UnlockBits(currentData);
-                previous.UnlockBits(previousData);
+                Debug.WriteLine($"差分計算エラー: {ex.Message}");
+                // エラー時は高い差分値を返して処理を継続させる
+                return 1.0;
             }
         }
 

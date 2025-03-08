@@ -57,6 +57,9 @@ namespace GameTranslationOverlay.Core.OCR
         private int _minDetectionInterval = 300;  // 最小感覚（ミリ秒）
         private int _maxDetectionInterval = 2000; // 最大間隔（ミリ秒）
 
+        private readonly AdaptiveDetectionInterval _adaptiveInterval;
+
+
         /// <summary>
         /// 翻訳先言語の設定（最適化のため）
         /// </summary>
@@ -105,6 +108,9 @@ namespace GameTranslationOverlay.Core.OCR
 
             // 差分検出器の初期化
             _differenceDetector = new DifferenceDetector();
+
+            // アダプティブ間隔調整の初期化
+            _adaptiveInterval = new AdaptiveDetectionInterval(_minDetectionInterval, _maxDetectionInterval, _detectionInterval);
 
             Debug.WriteLine("TextDetectionService: 初期化されました");
         }
@@ -272,6 +278,13 @@ namespace GameTranslationOverlay.Core.OCR
                         // 最低信頼度でフィルタリング
                         regions = regions.Where(r => r.Confidence >= _minimumConfidence).ToList();
 
+                        // アダプティブ間隔の更新
+                        if (_dynamicIntervalEnabled)
+                        {
+                            _adaptiveInterval.UpdateInterval(hasChange, regions.Count > 0);
+                            DetectionInterval = _adaptiveInterval.GetCurrentInterval();
+                        }
+
                         // 前回と今回の検出結果を比較
                         bool hadRegionsBefore = _detectedRegions.Count > 0;
                         bool hasRegionsNow = regions.Count > 0;
@@ -359,10 +372,11 @@ namespace GameTranslationOverlay.Core.OCR
                     }
                     else
                     {
-                        // 差分がない場合は間隔を徐々に長くする（非アクティブ状態と判断）
+                        // 差分がない場合の間隔調整
                         if (_dynamicIntervalEnabled)
                         {
-                            AdjustIntervalForActivity(false);
+                            _adaptiveInterval.UpdateInterval(false, false);
+                            DetectionInterval = _adaptiveInterval.GetCurrentInterval();
                         }
                     }
                 }
@@ -406,22 +420,40 @@ namespace GameTranslationOverlay.Core.OCR
 
             if (isActive)
             {
-                // アクティブ時は間隔を短くする
-                int newInterval = Math.Max(_detectionInterval / 2, _minDetectionInterval);
-                if (newInterval != _detectionInterval)
+                // アダプティブ間隔を使用する場合
+                if (_adaptiveInterval != null)
                 {
-                    Debug.WriteLine($"アクティブなテキスト検出を確認: 間隔を {_detectionInterval}ms から {newInterval}ms に短縮します");
-                    DetectionInterval = newInterval;
+                    _adaptiveInterval.TemporarilyDecreaseInterval();
+                    DetectionInterval = _adaptiveInterval.GetCurrentInterval();
+                }
+                else
+                {
+                    // 従来の実装（互換性のため）
+                    int newInterval = Math.Max(_detectionInterval / 2, _minDetectionInterval);
+                    if (newInterval != _detectionInterval)
+                    {
+                        Debug.WriteLine($"アクティブなテキスト検出を確認: 間隔を {_detectionInterval}ms から {newInterval}ms に短縮します");
+                        DetectionInterval = newInterval;
+                    }
                 }
             }
             else
             {
-                // 非アクティブ時は間隔を長くする
-                int newInterval = Math.Min(_detectionInterval * 3 / 2, _maxDetectionInterval);
-                if (newInterval != _detectionInterval)
+                // アダプティブ間隔を使用する場合
+                if (_adaptiveInterval != null)
                 {
-                    Debug.WriteLine($"非アクティブ状態を確認: 間隔を {_detectionInterval}ms から {newInterval}ms に延長します");
-                    DetectionInterval = newInterval;
+                    _adaptiveInterval.TemporarilyIncreaseInterval();
+                    DetectionInterval = _adaptiveInterval.GetCurrentInterval();
+                }
+                else
+                {
+                    // 従来の実装（互換性のため）
+                    int newInterval = Math.Min(_detectionInterval * 3 / 2, _maxDetectionInterval);
+                    if (newInterval != _detectionInterval)
+                    {
+                        Debug.WriteLine($"非アクティブ状態を確認: 間隔を {_detectionInterval}ms から {newInterval}ms に延長します");
+                        DetectionInterval = newInterval;
+                    }
                 }
             }
         }
