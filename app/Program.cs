@@ -1,209 +1,274 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using System.Windows.Forms;
 using System.Diagnostics;
-using System.IO;
-using System.Reflection;
-using GameTranslationOverlay.Core.Configuration;
-using GameTranslationOverlay.Core.Licensing;
-using GameTranslationOverlay.Core.Security;
+using System.Threading;
+using System.Windows.Forms;
+using GameTranslationOverlay.Core.OCR;
+using GameTranslationOverlay.Core.Utils;
+using GameTranslationOverlay.Forms;
 
 namespace GameTranslationOverlay
 {
     static class Program
     {
-        // アプリケーションのバージョン
-        public static readonly string AppVersion = "1.0.0";
+        // グローバルな例外ハンドラー用のイベント
+        public static event EventHandler<UnhandledExceptionEventArgs> UnhandledException;
 
-        // デバッグログのファイルパス
-        private static readonly string LogFilePath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        // アプリケーション終了時の処理用のイベント
+        public static event EventHandler ApplicationExit;
+
+        // クラッシュログ用のパス
+        private static readonly string CrashLogPath = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "GameTranslationOverlay",
-            "logs",
-            $"app_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+            "crash_log.txt");
 
         /// <summary>
-        /// アプリケーションのメイン エントリ ポイントです。
+        /// アプリケーションのメインエントリーポイント
         /// </summary>
         [STAThread]
         static void Main()
         {
             try
             {
-                // ログディレクトリを作成
-                EnsureLogDirectoryExists();
+                // グローバル例外ハンドラーの設定
+                Application.ThreadException += Application_ThreadException;
+                AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
 
-                // ログの開始
-                StartLogging();
+                // UIスレッド以外の例外をキャッチするためのハンドラ
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
 
-                LogInfo($"アプリケーション起動: バージョン {AppVersion}");
-
-                // アプリケーション設定の初期化
-                LogInfo("アプリケーション設定を初期化しています...");
-                var settings = AppSettings.Instance;
-
-                // アプリケーションバージョンの更新
-                if (settings.AppVersion != AppVersion)
-                {
-                    settings.AppVersion = AppVersion;
-                    settings.SaveSettings();
-                    LogInfo($"アプリケーションバージョンを更新しました: {AppVersion}");
-                }
-
-                LogInfo($"設定を読み込みました: バージョン={settings.AppVersion}, デバッグモード={settings.DebugModeEnabled}");
-
-                // ライセンス管理の初期化
-                LogInfo("ライセンス状態を初期化しています...");
-                var licenseManager = LicenseManager.Instance;
-
-                // ライセンスの検証
-                licenseManager.VerifyLicense();
-                LogInfo($"ライセンス状態: タイプ={licenseManager.CurrentLicenseType}, 有効={licenseManager.IsLicenseValid}");
-
-                // デバッグモードの設定によって動作を変更
-                if (settings.DebugModeEnabled)
-                {
-                    LogInfo("デバッグモードが有効: 全機能にアクセス可能");
-
-                    // デバッグモード用の追加設定
-                    if (string.IsNullOrEmpty(settings.LicenseKey) && Debugger.IsAttached)
-                    {
-                        // 開発モードでの動作確認用にProライセンスを生成
-                        string testLicenseKey = licenseManager.GenerateLicenseKey(LicenseType.Pro, 12);
-                        LogInfo($"開発用ライセンスキーを生成しました: {testLicenseKey}");
-
-                        // 実際のアプリケーションでは表示だけにして設定はしない
-                        // settings.LicenseKey = testLicenseKey;
-                        // settings.SaveSettings();
-                    }
-                }
-
-                // APIキー管理の初期化チェック
-                CheckApiKeyStatus();
-
-                // アプリケーション表示設定
+                // Windows Formsアプリケーションの設定
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
 
-                // メインフォームを起動
-                LogInfo("メインフォームを起動します");
-                Application.Run(new MainForm());
+                // ディレクトリの確認と作成
+                EnsureApplicationDirectories();
+
+                // アプリケーション終了時の処理を設定
+                Application.ApplicationExit += (s, e) =>
+                {
+                    Debug.WriteLine("アプリケーションが終了しています...");
+                    CleanupResources();
+                    ApplicationExit?.Invoke(s, e);
+                };
+
+                // アプリケーションの起動処理を実行
+                Debug.WriteLine("アプリケーションを初期化しています...");
+
+                // OCRマネージャーの初期化
+                OcrManager ocrManager = InitializeOcrManager();
+
+                // メインフォームの作成と実行
+                var mainForm = new MainForm();
             }
             catch (Exception ex)
             {
-                string errorMessage = $"アプリケーション起動中にエラーが発生しました: {ex.Message}";
-                LogError(errorMessage);
-                LogError($"詳細: {ex.StackTrace}");
-
-                MessageBox.Show(
-                    $"アプリケーションの初期化中にエラーが発生しました。\n\n{ex.Message}",
-                    "起動エラー",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
-
-                // 重大なエラーが発生した場合、環境によってはログファイルの保存先を通知
-                if (Debugger.IsAttached)
-                {
-                    MessageBox.Show(
-                        $"ログファイルは以下の場所に保存されています:\n{LogFilePath}",
-                        "デバッグ情報",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information);
-                }
+                // 起動中の致命的なエラーを処理
+                HandleFatalError(ex, "アプリケーションの起動中にエラーが発生しました");
             }
         }
 
         /// <summary>
-        /// ログディレクトリの存在を確認し、必要に応じて作成する
+        /// OCRマネージャーを初期化
         /// </summary>
-        private static void EnsureLogDirectoryExists()
-        {
-            string logDirectory = Path.GetDirectoryName(LogFilePath);
-            if (!Directory.Exists(logDirectory))
-            {
-                Directory.CreateDirectory(logDirectory);
-            }
-        }
-
-        /// <summary>
-        /// ログ機能を開始
-        /// </summary>
-        private static void StartLogging()
-        {
-            // デバッグ出力をファイルにリダイレクト
-            TextWriterTraceListener listener = new TextWriterTraceListener(LogFilePath);
-            Trace.Listeners.Add(listener);
-            Trace.AutoFlush = true;
-
-            // ログファイルのヘッダー
-            Trace.WriteLine($"-----------------------------------------------------------");
-            Trace.WriteLine($"GameTranslationOverlay ログ - バージョン {AppVersion}");
-            Trace.WriteLine($"開始時刻: {DateTime.Now}");
-            Trace.WriteLine($"実行環境: {Environment.OSVersion}, CLR {Environment.Version}");
-            Trace.WriteLine($"-----------------------------------------------------------");
-        }
-
-        /// <summary>
-        /// APIキーの状態を確認
-        /// </summary>
-        private static void CheckApiKeyStatus()
+        private static OcrManager InitializeOcrManager()
         {
             try
             {
-                var settings = AppSettings.Instance;
+                Debug.WriteLine("OCRマネージャーを初期化しています...");
+                var ocrManager = new OcrManager();
 
-                // カスタムAPIキーが設定されているか確認
-                if (!string.IsNullOrEmpty(settings.CustomApiKey))
-                {
-                    LogInfo("カスタムAPIキーが設定されています");
-                }
-                else
-                {
-                    // ビルトインキーを試行
-                    string apiKey = ApiKeyProtector.Instance.GetDecryptedApiKey();
-                    if (string.IsNullOrEmpty(apiKey))
-                    {
-                        LogWarning("APIキーが設定されていないため、AI翻訳機能が制限されます");
-                    }
-                    else
-                    {
-                        LogInfo("ビルトインAPIキーを使用します");
-                    }
-                }
+                // 非同期初期化を同期的に実行（シンプルにするため）
+                ocrManager.InitializeAsync().GetAwaiter().GetResult();
+
+                Debug.WriteLine("OCRマネージャーの初期化が完了しました");
+                return ocrManager;
             }
             catch (Exception ex)
             {
-                LogWarning($"APIキー確認中にエラーが発生しました: {ex.Message}");
+                Debug.WriteLine($"OCRマネージャーの初期化に失敗しました: {ex.Message}");
+                throw new ApplicationException("OCRエンジンの初期化に失敗しました", ex);
             }
         }
 
         /// <summary>
-        /// 情報レベルのログを出力
+        /// アプリケーションのディレクトリを確認・作成
         /// </summary>
-        private static void LogInfo(string message)
+        private static void EnsureApplicationDirectories()
         {
-            string formattedMessage = $"[INFO] {DateTime.Now:HH:mm:ss.fff} - {message}";
-            Debug.WriteLine(formattedMessage);
+            try
+            {
+                string appDataDir = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "GameTranslationOverlay");
+
+                // アプリケーションのデータディレクトリを確認・作成
+                if (!System.IO.Directory.Exists(appDataDir))
+                {
+                    System.IO.Directory.CreateDirectory(appDataDir);
+                }
+
+                // 設定ディレクトリ
+                string settingsDir = System.IO.Path.Combine(appDataDir, "Settings");
+                if (!System.IO.Directory.Exists(settingsDir))
+                {
+                    System.IO.Directory.CreateDirectory(settingsDir);
+                }
+
+                // ログディレクトリ
+                string logDir = System.IO.Path.Combine(appDataDir, "Logs");
+                if (!System.IO.Directory.Exists(logDir))
+                {
+                    System.IO.Directory.CreateDirectory(logDir);
+                }
+
+                Debug.WriteLine($"アプリケーションディレクトリを確認・作成しました: {appDataDir}");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"ディレクトリ確認・作成エラー: {ex.Message}");
+                // 致命的ではないエラーのため、例外は再スローしない
+            }
         }
 
         /// <summary>
-        /// 警告レベルのログを出力
+        /// アプリケーション終了時のリソースクリーンアップ
         /// </summary>
-        private static void LogWarning(string message)
+        private static void CleanupResources()
         {
-            string formattedMessage = $"[WARN] {DateTime.Now:HH:mm:ss.fff} - {message}";
-            Debug.WriteLine(formattedMessage);
+            try
+            {
+                Debug.WriteLine("リソースのクリーンアップを実行しています...");
+
+                // ResourceManagerのリソース解放
+                int disposedCount = ResourceManager.DisposeAll();
+                Debug.WriteLine($"{disposedCount}個のリソースを解放しました");
+
+                // 明示的なGC実行（通常は必要ないが、終了時は安全のため）
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"リソースクリーンアップ中にエラーが発生しました: {ex.Message}");
+            }
         }
 
         /// <summary>
-        /// エラーレベルのログを出力
+        /// UIスレッドでの例外ハンドラー
         /// </summary>
-        private static void LogError(string message)
+        private static void Application_ThreadException(object sender, ThreadExceptionEventArgs e)
         {
-            string formattedMessage = $"[ERROR] {DateTime.Now:HH:mm:ss.fff} - {message}";
-            Debug.WriteLine(formattedMessage);
+            HandleException(e.Exception, "UIスレッドでの未処理例外");
+        }
+
+        /// <summary>
+        /// 未処理の例外ハンドラー
+        /// </summary>
+        private static void CurrentDomain_UnhandledException(object sender, UnhandledExceptionEventArgs e)
+        {
+            if (e.ExceptionObject is Exception ex)
+            {
+                HandleException(ex, "未処理の例外");
+            }
+            else
+            {
+                HandleFatalError(new Exception("不明なエラー"), "未処理の例外（不明）");
+            }
+        }
+
+        /// <summary>
+        /// 例外を処理
+        /// </summary>
+        private static void HandleException(Exception ex, string context)
+        {
+            try
+            {
+                // 内部イベントを発行（カスタム処理のため）
+                UnhandledException?.Invoke(null, new UnhandledExceptionEventArgs(ex, false));
+
+                // エラーをログに記録
+                LogError(ex, context);
+
+                // エラーをユーザーに通知
+                MessageBox.Show(
+                    $"エラーが発生しました: {ex.Message}\n\n詳細はログファイルを確認してください。",
+                    "エラー",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            catch
+            {
+                // 例外ハンドラー内のエラーは無視（さらなる例外を防ぐため）
+            }
+        }
+
+        /// <summary>
+        /// 致命的なエラーを処理
+        /// </summary>
+        private static void HandleFatalError(Exception ex, string context)
+        {
+            try
+            {
+                // 内部イベントを発行
+                UnhandledException?.Invoke(null, new UnhandledExceptionEventArgs(ex, true));
+
+                // エラーをログに記録
+                LogError(ex, context + " (致命的)");
+
+                // リソースのクリーンアップを試行
+                CleanupResources();
+
+                // エラーをユーザーに通知
+                MessageBox.Show(
+                    $"致命的なエラーが発生したため、アプリケーションを終了します:\n{ex.Message}\n\n詳細はログファイルを確認してください。",
+                    "致命的なエラー",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+
+                // アプリケーションを終了
+                Environment.Exit(1);
+            }
+            catch
+            {
+                // 最終手段として強制終了
+                Environment.Exit(2);
+            }
+        }
+
+        /// <summary>
+        /// エラーをログファイルに記録
+        /// </summary>
+        private static void LogError(Exception ex, string context)
+        {
+            try
+            {
+                // エラーログディレクトリを確認
+                string logDir = System.IO.Path.GetDirectoryName(CrashLogPath);
+                if (!System.IO.Directory.Exists(logDir))
+                {
+                    System.IO.Directory.CreateDirectory(logDir);
+                }
+
+                // クラッシュログを出力
+                string errorLog = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {context}\n" +
+                                 $"例外: {ex.GetType().FullName}\n" +
+                                 $"メッセージ: {ex.Message}\n" +
+                                 $"スタックトレース:\n{ex.StackTrace}\n\n" +
+                                 $"内部例外: {ex.InnerException?.Message}\n" +
+                                 $"システム情報: {Environment.OSVersion}, {Environment.ProcessorCount} CPUs\n" +
+                                 $"メモリ: {GC.GetTotalMemory(false) / (1024 * 1024)} MB\n" +
+                                 $"-----------------------------------\n\n";
+
+                // ファイルに追記
+                System.IO.File.AppendAllText(CrashLogPath, errorLog);
+
+                Debug.WriteLine($"エラーログを保存しました: {CrashLogPath}");
+            }
+            catch (Exception logEx)
+            {
+                Debug.WriteLine($"エラーログの保存に失敗しました: {logEx.Message}");
+            }
         }
     }
 }

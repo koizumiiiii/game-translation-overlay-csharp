@@ -29,10 +29,21 @@ namespace GameTranslationOverlay.Core.OCR
         private bool _useProgressiveScan = true;
         private const int MAX_SCAN_ATTEMPTS = 3;
 
-        // パフォーマンス測定
+        // 並行処理の制御
+        private readonly object _ocrLock = new object();
+        private bool _processingActive = false;
+        private int _consecutiveErrors = 0;
+        private const int MAX_CONSECUTIVE_ERRORS = 5;
+
+        // パフォーマンス測定とトラッキング
         private readonly Stopwatch _stopwatch = new Stopwatch();
         private readonly List<double> _processingTimes = new List<double>();
         private const int MAX_TIMING_SAMPLES = 50;
+
+        // OCRキャッシュ（同一画像に対する重複OCR処理を防止）
+        private readonly Dictionary<int, List<TextRegion>> _ocrCache = new Dictionary<int, List<TextRegion>>();
+        private const int MAX_CACHE_ENTRIES = 20;
+        private DateTime _lastCacheCleanupTime = DateTime.MinValue;
 
         /// <summary>
         /// コンストラクタ
@@ -57,6 +68,9 @@ namespace GameTranslationOverlay.Core.OCR
                 _paddleOcrEngine = new PaddleOcrEngine();
                 await _paddleOcrEngine.InitializeAsync();
 
+                // リソースマネージャーに登録
+                ResourceManager.TrackResource(_paddleOcrEngine);
+
                 Debug.WriteLine("OCRエンジンの初期化が完了しました");
             }
             catch (Exception ex)
@@ -73,14 +87,44 @@ namespace GameTranslationOverlay.Core.OCR
         /// <returns>検出されたテキスト領域のリスト</returns>
         public async Task<List<TextRegion>> DetectTextRegionsAsync(Bitmap image)
         {
-            if (image == null)
+            // 並行処理のチェック
+            if (_processingActive)
+            {
+                Debug.WriteLine("OCR: 前回の処理が完了していないため、処理をスキップします");
                 return new List<TextRegion>();
+            }
 
+            if (image == null)
+            {
+                Debug.WriteLine("OCR: 入力画像がnullです");
+                return new List<TextRegion>();
+            }
+
+            _processingActive = true;
             _stopwatch.Restart();
-            List<TextRegion> regions = new List<TextRegion>();
+
+            // キャッシュのクリーンアップ（定期的）
+            if ((DateTime.Now - _lastCacheCleanupTime).TotalSeconds > 60)
+            {
+                CleanupCache();
+                _lastCacheCleanupTime = DateTime.Now;
+            }
+
+            // 画像のハッシュコードを計算（キャッシュに使用）
+            int imageHash = CalculateImageHash(image);
 
             try
             {
+                // キャッシュをチェック
+                if (_ocrCache.TryGetValue(imageHash, out var cachedRegions))
+                {
+                    _processingActive = false;
+                    Debug.WriteLine($"OCR: キャッシュから{cachedRegions.Count}個のテキスト領域を取得");
+                    return cachedRegions;
+                }
+
+                List<TextRegion> regions = new List<TextRegion>();
+
                 if (_useProgressiveScan)
                 {
                     // 段階的スキャン（複数の閾値・設定で試行）
@@ -101,18 +145,156 @@ namespace GameTranslationOverlay.Core.OCR
                     _adaptivePreprocessor.AdjustSettings(regions.Count);
                 }
 
+                // 結果をキャッシュに追加
+                if (regions.Count > 0)
+                {
+                    AddToCache(imageHash, regions);
+                }
+
+                // 連続エラーカウンターをリセット
+                _consecutiveErrors = 0;
+
                 // パフォーマンス計測
                 _stopwatch.Stop();
                 RecordProcessingTime(_stopwatch.ElapsedMilliseconds);
 
-                Debug.WriteLine($"{regions.Count}個のテキスト領域を検出（処理時間: {_stopwatch.ElapsedMilliseconds}ms）");
+                Debug.WriteLine($"OCR: {regions.Count}個のテキスト領域を検出（処理時間: {_stopwatch.ElapsedMilliseconds}ms）");
+
                 return regions;
             }
             catch (Exception ex)
             {
                 _stopwatch.Stop();
-                Debug.WriteLine($"テキスト領域検出エラー: {ex.Message}");
+                _consecutiveErrors++;
+                Debug.WriteLine($"OCR: テキスト領域検出エラー: {ex.Message}");
+
+                // 連続エラーが多い場合、リソースをクリーンアップ
+                if (_consecutiveErrors >= MAX_CONSECUTIVE_ERRORS)
+                {
+                    Debug.WriteLine($"OCR: 連続エラーが{MAX_CONSECUTIVE_ERRORS}回発生したため、リソースをクリーンアップします");
+                    CleanupResources();
+                    _consecutiveErrors = 0;
+                }
+
                 return new List<TextRegion>();
+            }
+            finally
+            {
+                _processingActive = false;
+            }
+        }
+
+        /// <summary>
+        /// 画像のハッシュ値を計算（簡易的な方法）
+        /// </summary>
+        private int CalculateImageHash(Bitmap image)
+        {
+            try
+            {
+                // 単純なハッシュ計算（完全なマッチングではなく近似）
+                int hash = 17;
+                hash = hash * 31 + image.Width;
+                hash = hash * 31 + image.Height;
+
+                // 数ポイントをサンプリングして特徴を抽出
+                int samplingSize = 5;
+                int stepX = Math.Max(1, image.Width / samplingSize);
+                int stepY = Math.Max(1, image.Height / samplingSize);
+
+                for (int y = 0; y < image.Height; y += stepY)
+                {
+                    for (int x = 0; x < image.Width; x += stepX)
+                    {
+                        if (x < image.Width && y < image.Height)
+                        {
+                            Color pixel = image.GetPixel(x, y);
+                            // 色の大まかな特徴だけを使用
+                            int colorValue = (pixel.R / 32) * 1000000 + (pixel.G / 32) * 1000 + (pixel.B / 32);
+                            hash = hash * 31 + colorValue;
+                        }
+                    }
+                }
+
+                return hash;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"画像ハッシュ計算エラー: {ex.Message}");
+                // エラー時は固有のハッシュを返す（キャッシュヒットしないよう）
+                return image.GetHashCode();
+            }
+        }
+
+        /// <summary>
+        /// キャッシュにテキスト領域を追加
+        /// </summary>
+        private void AddToCache(int imageHash, List<TextRegion> regions)
+        {
+            try
+            {
+                // キャッシュが大きすぎる場合、古いエントリを削除
+                if (_ocrCache.Count >= MAX_CACHE_ENTRIES)
+                {
+                    int oldestKey = _ocrCache.Keys.First();
+                    _ocrCache.Remove(oldestKey);
+                }
+
+                // 結果のディープコピーを保存（参照の問題を避けるため）
+                var regionsCopy = regions.Select(r => new TextRegion
+                {
+                    Text = r.Text,
+                    Confidence = r.Confidence,
+                    Bounds = r.Bounds
+                }).ToList();
+
+                _ocrCache[imageHash] = regionsCopy;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"キャッシュ追加エラー: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// キャッシュのクリーンアップ
+        /// </summary>
+        private void CleanupCache()
+        {
+            try
+            {
+                // キャッシュが一定サイズを超えたらクリアする
+                if (_ocrCache.Count > MAX_CACHE_ENTRIES / 2)
+                {
+                    Debug.WriteLine($"OCRキャッシュをクリーンアップしています（現在のエントリ数: {_ocrCache.Count}）");
+                    _ocrCache.Clear();
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"キャッシュクリーンアップエラー: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// リソースのクリーンアップ
+        /// </summary>
+        private void CleanupResources()
+        {
+            try
+            {
+                // キャッシュのクリア
+                _ocrCache.Clear();
+
+                // リソースマネージャーのクリーンアップ促進
+                ResourceManager.CleanupDeadReferences();
+
+                // GCの実行を促進
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"リソースクリーンアップエラー: {ex.Message}");
             }
         }
 
@@ -121,24 +303,47 @@ namespace GameTranslationOverlay.Core.OCR
         /// </summary>
         private async Task<List<TextRegion>> ScanWithCurrentSettingsAsync(Bitmap image)
         {
-            Bitmap processedImage = image;
+            Bitmap processedImage = null;
 
-            // 前処理を適用
-            if (_usePreprocessing)
+            try
             {
-                processedImage = _adaptivePreprocessor.ApplyPreprocessing(image);
+                // 前処理を適用
+                if (_usePreprocessing)
+                {
+                    processedImage = _adaptivePreprocessor.ApplyPreprocessing(image);
+                    if (processedImage == null)
+                    {
+                        Debug.WriteLine("前処理に失敗したため、元の画像を使用します");
+                        processedImage = new Bitmap(image);
+                    }
+                }
+                else
+                {
+                    // 元の画像のコピーを使用（安全のため）
+                    processedImage = new Bitmap(image);
+                }
+
+                // リソースマネージャーに登録
+                ResourceManager.TrackResource(processedImage);
+
+                // OCRエンジンでテキスト領域を検出
+                var regions = await _paddleOcrEngine.DetectTextRegionsAsync(processedImage);
+
+                return regions;
             }
-
-            // OCRエンジンでテキスト領域を検出
-            var regions = await _paddleOcrEngine.DetectTextRegionsAsync(processedImage);
-
-            // 前処理で作成した新しい画像を解放
-            if (_usePreprocessing && processedImage != image)
+            catch (Exception ex)
             {
-                processedImage.Dispose();
+                Debug.WriteLine($"OCRスキャンエラー: {ex.Message}");
+                throw;
             }
-
-            return regions;
+            finally
+            {
+                // 前処理で作成した新しい画像を解放
+                if (processedImage != null && processedImage != image)
+                {
+                    ResourceManager.ReleaseResource(processedImage);
+                }
+            }
         }
 
         /// <summary>
@@ -168,11 +373,16 @@ namespace GameTranslationOverlay.Core.OCR
                     _adaptivePreprocessor.TryNextPreset();
                 }
 
-                // 再試行
-                regions = await ScanWithCurrentSettingsAsync(image);
-
-                // 設定を元に戻す
-                _confidenceThreshold = originalThreshold;
+                try
+                {
+                    // 再試行
+                    regions = await ScanWithCurrentSettingsAsync(image);
+                }
+                finally
+                {
+                    // 設定を元に戻す
+                    _confidenceThreshold = originalThreshold;
+                }
 
                 // 結果があれば終了
                 if (regions.Count > 0)
@@ -199,12 +409,19 @@ namespace GameTranslationOverlay.Core.OCR
         /// </summary>
         private void RecordProcessingTime(long milliseconds)
         {
-            _processingTimes.Add(milliseconds);
-
-            // サンプル数を制限
-            if (_processingTimes.Count > MAX_TIMING_SAMPLES)
+            try
             {
-                _processingTimes.RemoveAt(0);
+                _processingTimes.Add(milliseconds);
+
+                // サンプル数を制限
+                if (_processingTimes.Count > MAX_TIMING_SAMPLES)
+                {
+                    _processingTimes.RemoveAt(0);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"処理時間記録エラー: {ex.Message}");
             }
         }
 
@@ -309,7 +526,17 @@ namespace GameTranslationOverlay.Core.OCR
                    $"前処理: {(_usePreprocessing ? "有効" : "無効")}, " +
                    $"適応モード: {(_useAdaptiveMode ? "有効" : "無効")}, " +
                    $"段階的スキャン: {(_useProgressiveScan ? "有効" : "無効")}, " +
-                   $"平均処理時間: {avgTime:F1}ms";
+                   $"平均処理時間: {avgTime:F1}ms, " +
+                   $"キャッシュエントリ数: {_ocrCache.Count}";
+        }
+
+        /// <summary>
+        /// OCRキャッシュをクリア
+        /// </summary>
+        public void ClearCache()
+        {
+            _ocrCache.Clear();
+            Debug.WriteLine("OCRキャッシュをクリアしました");
         }
 
         /// <summary>
@@ -335,6 +562,7 @@ namespace GameTranslationOverlay.Core.OCR
                 _adaptivePreprocessor.ResetToDefault();
             }
 
+            ClearCache();
             Debug.WriteLine("すべての設定をデフォルトに戻しました");
         }
 
@@ -377,6 +605,7 @@ namespace GameTranslationOverlay.Core.OCR
                 {
                     // マネージドリソースの破棄
                     _paddleOcrEngine?.Dispose();
+                    _ocrCache.Clear();
                     _processingTimes.Clear();
                 }
 
