@@ -1,7 +1,9 @@
-﻿namespace GameTranslationOverlay.Core.OCR
+﻿using System;
+
+namespace GameTranslationOverlay.Core.OCR
 {
     /// <summary>
-    /// 画像前処理のオプションを設定するクラス
+    /// OCR処理用の画像前処理のオプションを設定するクラス
     /// </summary>
     public class PreprocessingOptions
     {
@@ -39,50 +41,45 @@
         /// パディング（画像の周囲に追加するピクセル数）
         /// </summary>
         public int Padding { get; set; } = 0;
-    }
-
-    /// <summary>
-    /// 画像前処理ユーティリティ
-    /// </summary>
-    public static class ImagePreprocessor
-    {
-        /// <summary>
-        /// 日本語テキスト用プリセット
-        /// </summary>
-        public static PreprocessingOptions JapaneseTextPreset => new PreprocessingOptions
-        {
-            ContrastLevel = 1.2f,
-            BrightnessLevel = 1.0f,
-            SharpnessLevel = 0.3f,
-            NoiseReduction = 1,
-            ScaleFactor = 1.5f,
-            Padding = 10
-        };
 
         /// <summary>
-        /// 英語テキスト用プリセット
+        /// UtilsのPreprocessingOptionsからコピーして作成
         /// </summary>
-        public static PreprocessingOptions EnglishTextPreset => new PreprocessingOptions
+        /// <param name="utilsOptions">コピー元のオプション</param>
+        /// <returns>新しいPreprocessingOptionsインスタンス</returns>
+        public static PreprocessingOptions FromUtilsOptions(GameTranslationOverlay.Core.Utils.PreprocessingOptions utilsOptions)
         {
-            ContrastLevel = 1.1f,
-            BrightnessLevel = 1.0f,
-            SharpnessLevel = 0.2f,
-            NoiseReduction = 1,
-            ScaleFactor = 1.0f,
-            Padding = 5
-        };
+            if (utilsOptions == null)
+                return new PreprocessingOptions();
+
+            return new PreprocessingOptions
+            {
+                ContrastLevel = utilsOptions.ContrastLevel,
+                BrightnessLevel = utilsOptions.BrightnessLevel,
+                SharpnessLevel = utilsOptions.SharpnessLevel,
+                NoiseReduction = utilsOptions.NoiseReduction,
+                Threshold = utilsOptions.Threshold,
+                ScaleFactor = utilsOptions.ScaleFactor,
+                Padding = utilsOptions.Padding
+            };
+        }
 
         /// <summary>
-        /// ゲーム用軽量プリセット
+        /// Utils名前空間のPreprocessingOptionsに変換
         /// </summary>
-        public static PreprocessingOptions GameTextLightPreset => new PreprocessingOptions
+        /// <returns>Utils名前空間のPreprocessingOptionsインスタンス</returns>
+        public GameTranslationOverlay.Core.Utils.PreprocessingOptions ToUtilsOptions()
         {
-            ContrastLevel = 1.1f,
-            BrightnessLevel = 1.0f,
-            SharpnessLevel = 0.0f,
-            NoiseReduction = 0,
-            ScaleFactor = 1.0f,
-            Padding = 2
-        };
+            return new GameTranslationOverlay.Core.Utils.PreprocessingOptions
+            {
+                ContrastLevel = this.ContrastLevel,
+                BrightnessLevel = this.BrightnessLevel,
+                SharpnessLevel = this.SharpnessLevel,
+                NoiseReduction = this.NoiseReduction,
+                Threshold = this.Threshold,
+                ScaleFactor = this.ScaleFactor,
+                Padding = this.Padding
+            };
+        }
     }
 }

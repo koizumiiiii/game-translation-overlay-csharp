@@ -1,448 +1,579 @@
 ﻿using System;
 using System.Drawing;
 using System.Drawing.Imaging;
-using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using System.Diagnostics;
+using OCRNamespace = GameTranslationOverlay.Core.OCR;
 
 namespace GameTranslationOverlay.Core.Utils
 {
     /// <summary>
-    /// OCR精度向上のための画像前処理ユーティリティクラス
+    /// 画像前処理ユーティリティクラス
     /// </summary>
     public static class ImagePreprocessor
     {
         /// <summary>
-        /// 画像の前処理を行い、OCR精度を向上させる
+        /// 日本語テキスト用のプリセット
         /// </summary>
-        /// <param name="source">元画像</param>
+        public static OCRNamespace.PreprocessingOptions JapaneseTextPreset => new OCRNamespace.PreprocessingOptions
+        {
+            ContrastLevel = 1.3f,
+            BrightnessLevel = 1.1f,
+            SharpnessLevel = 0.5f,
+            NoiseReduction = 1,
+            Threshold = 0,
+            ScaleFactor = 1.0f,
+            Padding = 2
+        };
+
+        /// <summary>
+        /// 英語テキスト用のプリセット
+        /// </summary>
+        public static OCRNamespace.PreprocessingOptions EnglishTextPreset => new OCRNamespace.PreprocessingOptions
+        {
+            ContrastLevel = 1.2f,
+            BrightnessLevel = 1.0f,
+            SharpnessLevel = 0.3f,
+            NoiseReduction = 0,
+            Threshold = 0,
+            ScaleFactor = 1.0f,
+            Padding = 0
+        };
+
+        /// <summary>
+        /// ゲームテキスト用の軽量プリセット
+        /// </summary>
+        public static OCRNamespace.PreprocessingOptions GameTextLightPreset => new OCRNamespace.PreprocessingOptions
+        {
+            ContrastLevel = 1.1f,
+            BrightnessLevel = 1.0f,
+            SharpnessLevel = 0.2f,
+            NoiseReduction = 0,
+            Threshold = 0,
+            ScaleFactor = 1.0f,
+            Padding = 0
+        };
+
+        /// <summary>
+        /// OCR名前空間のPreprocessingOptionsを使用して画像を処理
+        /// </summary>
+        /// <param name="source">元の画像</param>
         /// <param name="options">前処理オプション</param>
-        /// <returns>処理された画像</returns>
-        public static Bitmap Preprocess(Bitmap source, PreprocessingOptions options = null)
+        /// <returns>前処理を適用した画像</returns>
+        public static Bitmap ProcessImage(Bitmap source, OCRNamespace.PreprocessingOptions options)
         {
             if (source == null)
                 return null;
 
-            options = options ?? new PreprocessingOptions();
+            if (options == null)
+                return new Bitmap(source);
 
             try
             {
-                // 元画像のコピーを作成
-                Bitmap processedImage = new Bitmap(source.Width, source.Height, PixelFormat.Format24bppRgb);
+                // 元の画像をコピー
+                Bitmap processedImage = new Bitmap(source);
 
-                try
+                // コントラスト調整
+                if (options.ContrastLevel != 1.0f)
                 {
-                    // 画像処理のためのグラフィックスオブジェクトを作成
-                    using (Graphics g = Graphics.FromImage(processedImage))
-                    {
-                        g.SmoothingMode = SmoothingMode.AntiAlias;
-                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-
-                        // 基本的な描画
-                        g.DrawImage(source, new Rectangle(0, 0, source.Width, source.Height));
-                    }
-
-                    // オプションに応じて各処理を適用
-                    if (options.ApplyContrast)
-                    {
-                        processedImage = AdjustContrast(processedImage, options.ContrastLevel);
-                    }
-
-                    if (options.ApplyBrightness)
-                    {
-                        processedImage = AdjustBrightness(processedImage, options.BrightnessLevel);
-                    }
-
-                    if (options.ApplySharpening)
-                    {
-                        processedImage = Sharpen(processedImage, options.SharpeningLevel);
-                    }
-
-                    if (options.RemoveNoise)
-                    {
-                        processedImage = RemoveNoise(processedImage, options.NoiseReductionLevel);
-                    }
-
-                    if (options.ApplyThreshold)
-                    {
-                        processedImage = ApplyThreshold(processedImage, options.ThresholdLevel);
-                    }
-
-                    if (options.Scale != 1.0f)
-                    {
-                        processedImage = Resize(processedImage, options.Scale);
-                    }
-
-                    if (options.PaddingPixels > 0)
-                    {
-                        processedImage = AddPadding(processedImage, options.PaddingPixels);
-                    }
-
-                    return processedImage;
+                    processedImage = AdjustContrast(processedImage, options.ContrastLevel);
                 }
-                catch (Exception ex)
+
+                // 明るさ調整
+                if (options.BrightnessLevel != 1.0f)
                 {
-                    Debug.WriteLine($"Error in image preprocessing: {ex.Message}");
-                    processedImage?.Dispose();
-                    return new Bitmap(source); // エラー時は元画像のコピーを返す
+                    processedImage = AdjustBrightness(processedImage, options.BrightnessLevel);
                 }
+
+                // シャープネス調整
+                if (options.SharpnessLevel > 0)
+                {
+                    processedImage = ApplySharpen(processedImage, options.SharpnessLevel);
+                }
+
+                // ノイズ軽減
+                if (options.NoiseReduction > 0)
+                {
+                    processedImage = ReduceNoise(processedImage, options.NoiseReduction);
+                }
+
+                // 二値化処理
+                if (options.Threshold > 0)
+                {
+                    processedImage = ApplyThreshold(processedImage, options.Threshold);
+                }
+
+                // スケーリング
+                if (options.ScaleFactor != 1.0f)
+                {
+                    processedImage = Resize(processedImage, options.ScaleFactor);
+                }
+
+                // パディング
+                if (options.Padding > 0)
+                {
+                    processedImage = AddPadding(processedImage, options.Padding);
+                }
+
+                return processedImage;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Critical error in image preprocessing: {ex.Message}");
-                return new Bitmap(source); // エラー時は元画像のコピーを返す
+                Debug.WriteLine($"画像処理エラー: {ex.Message}");
+                return new Bitmap(source);
             }
         }
 
         /// <summary>
-        /// コントラストを調整する
+        /// Utils名前空間のPreprocessingOptionsを使用して画像を処理
         /// </summary>
-        private static Bitmap AdjustContrast(Bitmap image, float level)
+        /// <param name="source">元の画像</param>
+        /// <param name="options">前処理オプション</param>
+        /// <returns>前処理を適用した画像</returns>
+        public static Bitmap ProcessImage(Bitmap source, PreprocessingOptions options)
         {
+            if (source == null)
+                return null;
+
+            if (options == null)
+                return new Bitmap(source);
+
             try
             {
-                // コントラスト値の調整（-100〜100の範囲）
-                float contrast = (100.0f + level) / 100.0f;
-                contrast *= contrast; // 二乗して効果を強調
-
-                float[][] colorMatrixElements = {
-                    new float[] {contrast, 0, 0, 0, 0},
-                    new float[] {0, contrast, 0, 0, 0},
-                    new float[] {0, 0, contrast, 0, 0},
-                    new float[] {0, 0, 0, 1, 0},
-                    new float[] {0.5f * (1 - contrast), 0.5f * (1 - contrast), 0.5f * (1 - contrast), 0, 1}
+                // OCR名前空間のPreprocessingOptionsに変換
+                OCRNamespace.PreprocessingOptions ocrOptions = new OCRNamespace.PreprocessingOptions
+                {
+                    ContrastLevel = options.ContrastLevel,
+                    BrightnessLevel = options.BrightnessLevel,
+                    SharpnessLevel = options.SharpnessLevel,
+                    NoiseReduction = options.NoiseReduction,
+                    Threshold = options.Threshold,
+                    ScaleFactor = options.ScaleFactor,
+                    Padding = options.Padding
                 };
 
-                ColorMatrix colorMatrix = new ColorMatrix(colorMatrixElements);
-                ImageAttributes imageAttributes = new ImageAttributes();
-                imageAttributes.SetColorMatrix(colorMatrix);
-
-                Bitmap result = new Bitmap(image.Width, image.Height);
-                using (Graphics g = Graphics.FromImage(result))
-                {
-                    g.DrawImage(image,
-                        new Rectangle(0, 0, image.Width, image.Height),
-                        0, 0, image.Width, image.Height,
-                        GraphicsUnit.Pixel, imageAttributes);
-                }
-
-                return result;
+                // 変換したオプションで処理
+                return ProcessImage(source, ocrOptions);
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error adjusting contrast: {ex.Message}");
-                return image;
+                Debug.WriteLine($"画像処理エラー (Utils名前空間): {ex.Message}");
+                return new Bitmap(source);
+            }
+        }
+
+        // 以下、画像処理用の内部メソッド
+
+        /// <summary>
+        /// コントラスト調整
+        /// </summary>
+        private static Bitmap AdjustContrast(Bitmap image, float contrastLevel)
+        {
+            if (image == null)
+                return null;
+
+            try
+            {
+                Bitmap adjustedImage = new Bitmap(image.Width, image.Height);
+                float factor = (259 * (contrastLevel + 255)) / (255 * (259 - contrastLevel));
+
+                using (Graphics g = Graphics.FromImage(adjustedImage))
+                {
+                    ColorMatrix cm = new ColorMatrix(new float[][]
+                    {
+                        new float[] {factor, 0, 0, 0, 0},
+                        new float[] {0, factor, 0, 0, 0},
+                        new float[] {0, 0, factor, 0, 0},
+                        new float[] {0, 0, 0, 1, 0},
+                        new float[] {-128 * factor + 128, -128 * factor + 128, -128 * factor + 128, 0, 1}
+                    });
+
+                    ImageAttributes attributes = new ImageAttributes();
+                    attributes.SetColorMatrix(cm);
+
+                    g.DrawImage(image, new Rectangle(0, 0, image.Width, image.Height),
+                                0, 0, image.Width, image.Height,
+                                GraphicsUnit.Pixel, attributes);
+                }
+
+                return adjustedImage;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"コントラスト調整エラー: {ex.Message}");
+                return new Bitmap(image);
             }
         }
 
         /// <summary>
-        /// 明るさを調整する
+        /// 明るさ調整
         /// </summary>
-        private static Bitmap AdjustBrightness(Bitmap image, float level)
+        private static Bitmap AdjustBrightness(Bitmap image, float brightnessLevel)
         {
+            if (image == null)
+                return null;
+
             try
             {
-                // 明るさレベルを調整（-100〜100の範囲）
-                float brightness = level / 100.0f;
+                Bitmap adjustedImage = new Bitmap(image.Width, image.Height);
 
-                float[][] colorMatrixElements = {
-                    new float[] {1, 0, 0, 0, 0},
-                    new float[] {0, 1, 0, 0, 0},
-                    new float[] {0, 0, 1, 0, 0},
-                    new float[] {0, 0, 0, 1, 0},
-                    new float[] {brightness, brightness, brightness, 0, 1}
-                };
-
-                ColorMatrix colorMatrix = new ColorMatrix(colorMatrixElements);
-                ImageAttributes imageAttributes = new ImageAttributes();
-                imageAttributes.SetColorMatrix(colorMatrix);
-
-                Bitmap result = new Bitmap(image.Width, image.Height);
-                using (Graphics g = Graphics.FromImage(result))
+                using (Graphics g = Graphics.FromImage(adjustedImage))
                 {
-                    g.DrawImage(image,
-                        new Rectangle(0, 0, image.Width, image.Height),
-                        0, 0, image.Width, image.Height,
-                        GraphicsUnit.Pixel, imageAttributes);
+                    float brightness = brightnessLevel - 1.0f;
+
+                    ColorMatrix cm = new ColorMatrix(new float[][]
+                    {
+                        new float[] {1, 0, 0, 0, 0},
+                        new float[] {0, 1, 0, 0, 0},
+                        new float[] {0, 0, 1, 0, 0},
+                        new float[] {0, 0, 0, 1, 0},
+                        new float[] {brightness, brightness, brightness, 0, 1}
+                    });
+
+                    ImageAttributes attributes = new ImageAttributes();
+                    attributes.SetColorMatrix(cm);
+
+                    g.DrawImage(image, new Rectangle(0, 0, image.Width, image.Height),
+                                0, 0, image.Width, image.Height,
+                                GraphicsUnit.Pixel, attributes);
                 }
 
-                return result;
+                return adjustedImage;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error adjusting brightness: {ex.Message}");
-                return image;
+                Debug.WriteLine($"明るさ調整エラー: {ex.Message}");
+                return new Bitmap(image);
             }
         }
 
         /// <summary>
-        /// 画像をシャープにする
+        /// シャープネス調整
         /// </summary>
-        private static Bitmap Sharpen(Bitmap image, float strength)
+        private static Bitmap ApplySharpen(Bitmap image, float sharpnessLevel)
         {
+            if (image == null)
+                return null;
+
             try
             {
-                // 5x5シャープニング行列
+                Bitmap resultImage = new Bitmap(image.Width, image.Height);
+
+                // シャープネスのマトリックスを作成
+                float weight = Math.Min(sharpnessLevel, 1.0f);
                 float[,] sharpenMatrix = {
-                    { -1, -1, -1, -1, -1 },
-                    { -1,  2,  2,  2, -1 },
-                    { -1,  2,  16, 2, -1 },
-                    { -1,  2,  2,  2, -1 },
-                    { -1, -1, -1, -1, -1 }
+                    { -weight, -weight, -weight },
+                    { -weight, 9 + weight, -weight },
+                    { -weight, -weight, -weight }
                 };
 
-                // シャープニング強度の適用
-                float matrixSum = 16.0f;
-                for (int x = 0; x < 5; x++)
-                {
-                    for (int y = 0; y < 5; y++)
-                    {
-                        sharpenMatrix[x, y] *= strength;
-                    }
-                }
+                int width = image.Width;
+                int height = image.Height;
 
-                // カーネルの合計が1になるように調整
-                float scale = 1.0f / (matrixSum * strength);
-
-                Bitmap result = new Bitmap(image.Width, image.Height);
-                BitmapData srcData = image.LockBits(
-                    new Rectangle(0, 0, image.Width, image.Height),
+                // 元画像のピクセルデータを取得
+                BitmapData srcData = image.LockBits(new Rectangle(0, 0, width, height),
                     ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-                BitmapData destData = result.LockBits(
-                    new Rectangle(0, 0, result.Width, result.Height),
+
+                // 結果画像のピクセルデータを取得
+                BitmapData dstData = resultImage.LockBits(new Rectangle(0, 0, width, height),
                     ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
 
                 int stride = srcData.Stride;
                 IntPtr srcScan0 = srcData.Scan0;
-                IntPtr destScan0 = destData.Scan0;
+                IntPtr dstScan0 = dstData.Scan0;
 
-                unsafe
+                // ピクセルデータをコピー
+                int size = stride * height;
+                byte[] pixels = new byte[size];
+                byte[] resultPixels = new byte[size];
+                Marshal.Copy(srcScan0, pixels, 0, size);
+
+                // 端のピクセルはそのままコピー
+                Array.Copy(pixels, resultPixels, size);
+
+                // 内部ピクセルにシャープネスフィルタを適用
+                for (int y = 1; y < height - 1; y++)
                 {
-                    byte* src = (byte*)srcScan0;
-                    byte* dest = (byte*)destScan0;
-
-                    // 境界を除いて各ピクセルを処理
-                    for (int y = 2; y < image.Height - 2; y++)
+                    for (int x = 1; x < width - 1; x++)
                     {
-                        for (int x = 2; x < image.Width - 2; x++)
+                        int offset = y * stride + x * 4;
+
+                        double blue = 0;
+                        double green = 0;
+                        double red = 0;
+
+                        for (int ky = -1; ky <= 1; ky++)
                         {
-                            int offset = y * stride + x * 4;
-                            double blue = 0, green = 0, red = 0;
-
-                            // カーネルを適用
-                            for (int ky = -2; ky <= 2; ky++)
+                            for (int kx = -1; kx <= 1; kx++)
                             {
-                                for (int kx = -2; kx <= 2; kx++)
-                                {
-                                    int pos = offset + ky * stride + kx * 4;
-                                    blue += src[pos] * sharpenMatrix[ky + 2, kx + 2];
-                                    green += src[pos + 1] * sharpenMatrix[ky + 2, kx + 2];
-                                    red += src[pos + 2] * sharpenMatrix[ky + 2, kx + 2];
-                                }
+                                int pos = (y + ky) * stride + (x + kx) * 4;
+                                float matValue = sharpenMatrix[ky + 1, kx + 1];
+
+                                blue += pixels[pos] * matValue;
+                                green += pixels[pos + 1] * matValue;
+                                red += pixels[pos + 2] * matValue;
                             }
-
-                            // 値をスケールして範囲内に収める
-                            byte b = ClampToByte((int)(blue * scale));
-                            byte g = ClampToByte((int)(green * scale));
-                            byte r = ClampToByte((int)(red * scale));
-
-                            dest[offset] = b;
-                            dest[offset + 1] = g;
-                            dest[offset + 2] = r;
-                            dest[offset + 3] = src[offset + 3]; // アルファ値はそのまま
                         }
+
+                        // 値が範囲を超えないように調整
+                        blue = Math.Max(0, Math.Min(255, blue));
+                        green = Math.Max(0, Math.Min(255, green));
+                        red = Math.Max(0, Math.Min(255, red));
+
+                        // 安全に値を設定
+                        resultPixels[offset] = (byte)ClampToByte((int)blue);
+                        resultPixels[offset + 1] = (byte)ClampToByte((int)green);
+                        resultPixels[offset + 2] = (byte)ClampToByte((int)red);
                     }
                 }
 
-                image.UnlockBits(srcData);
-                result.UnlockBits(destData);
+                // 結果をコピー
+                Marshal.Copy(resultPixels, 0, dstScan0, size);
 
-                return result;
+                // リソース解放
+                image.UnlockBits(srcData);
+                resultImage.UnlockBits(dstData);
+
+                return resultImage;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error sharpening image: {ex.Message}");
-                return image;
+                Debug.WriteLine($"シャープネス調整エラー: {ex.Message}");
+                return new Bitmap(image);
             }
         }
 
         /// <summary>
-        /// ノイズを除去する
+        /// ノイズ軽減
         /// </summary>
-        private static Bitmap RemoveNoise(Bitmap image, int level)
+        private static Bitmap ReduceNoise(Bitmap image, int level)
         {
+            if (image == null)
+                return null;
+
+            // レベルが0以下の場合、何もしない
+            if (level <= 0)
+                return new Bitmap(image);
+
             try
             {
-                // メディアンフィルタによるノイズ除去
-                int filterSize = level; // フィルタサイズ（3、5、7など。奇数であるべき）
-                if (filterSize % 2 == 0)
-                    filterSize++; // 偶数の場合は奇数に調整
+                Bitmap resultImage = new Bitmap(image.Width, image.Height);
 
-                if (filterSize < 3)
-                    filterSize = 3; // 最小値は3
+                int width = image.Width;
+                int height = image.Height;
 
-                Bitmap result = new Bitmap(image.Width, image.Height);
-                BitmapData srcData = image.LockBits(
-                    new Rectangle(0, 0, image.Width, image.Height),
+                // 簡易的なメディアンフィルタを使用
+                int kernelSize = level * 2 + 1;
+                kernelSize = Math.Min(kernelSize, 5); // 最大サイズを制限
+
+                // 元画像のピクセルデータを取得
+                BitmapData srcData = image.LockBits(new Rectangle(0, 0, width, height),
                     ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-                BitmapData destData = result.LockBits(
-                    new Rectangle(0, 0, result.Width, result.Height),
+
+                // 結果画像のピクセルデータを取得
+                BitmapData dstData = resultImage.LockBits(new Rectangle(0, 0, width, height),
                     ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
 
                 int stride = srcData.Stride;
                 IntPtr srcScan0 = srcData.Scan0;
-                IntPtr destScan0 = destData.Scan0;
+                IntPtr dstScan0 = dstData.Scan0;
 
-                int halfFilter = filterSize / 2;
+                // ピクセルデータをコピー
+                int size = stride * height;
+                byte[] pixels = new byte[size];
+                byte[] resultPixels = new byte[size];
+                Marshal.Copy(srcScan0, pixels, 0, size);
 
-                unsafe
+                // 端のピクセルはそのままコピー
+                Array.Copy(pixels, resultPixels, size);
+
+                int radius = kernelSize / 2;
+
+                // メディアンフィルタを適用
+                for (int y = radius; y < height - radius; y++)
                 {
-                    byte* src = (byte*)srcScan0;
-                    byte* dest = (byte*)destScan0;
-
-                    // 境界を除いて各ピクセルを処理
-                    for (int y = halfFilter; y < image.Height - halfFilter; y++)
+                    for (int x = radius; x < width - radius; x++)
                     {
-                        for (int x = halfFilter; x < image.Width - halfFilter; x++)
+                        int offset = y * stride + x * 4;
+
+                        byte[] blueValues = new byte[kernelSize * kernelSize];
+                        byte[] greenValues = new byte[kernelSize * kernelSize];
+                        byte[] redValues = new byte[kernelSize * kernelSize];
+
+                        int index = 0;
+                        for (int ky = -radius; ky <= radius; ky++)
                         {
-                            int offset = y * stride + x * 4;
-
-                            byte[] blueValues = new byte[filterSize * filterSize];
-                            byte[] greenValues = new byte[filterSize * filterSize];
-                            byte[] redValues = new byte[filterSize * filterSize];
-
-                            // 周辺ピクセルの値を収集
-                            int index = 0;
-                            for (int ky = -halfFilter; ky <= halfFilter; ky++)
+                            for (int kx = -radius; kx <= radius; kx++)
                             {
-                                for (int kx = -halfFilter; kx <= halfFilter; kx++)
-                                {
-                                    int pos = offset + ky * stride + kx * 4;
-                                    blueValues[index] = src[pos];
-                                    greenValues[index] = src[pos + 1];
-                                    redValues[index] = src[pos + 2];
-                                    index++;
-                                }
+                                int pos = (y + ky) * stride + (x + kx) * 4;
+                                blueValues[index] = pixels[pos];
+                                greenValues[index] = pixels[pos + 1];
+                                redValues[index] = pixels[pos + 2];
+                                index++;
                             }
-
-                            // メディアン値を取得（簡易ソート）
-                            Array.Sort(blueValues);
-                            Array.Sort(greenValues);
-                            Array.Sort(redValues);
-
-                            // メディアン値を設定（値を0-255の範囲に収める）
-                            int medianIndex = blueValues.Length / 2;
-                            dest[offset] = ClampToByte(blueValues[medianIndex]);
-                            dest[offset + 1] = ClampToByte(greenValues[medianIndex]);
-                            dest[offset + 2] = ClampToByte(redValues[medianIndex]);
-                            dest[offset + 3] = src[offset + 3]; // アルファ値はそのまま
                         }
+
+                        // 各色のメディアン値を計算
+                        Array.Sort(blueValues);
+                        Array.Sort(greenValues);
+                        Array.Sort(redValues);
+
+                        int medianIndex = blueValues.Length / 2;
+
+                        // 安全に値を設定
+                        resultPixels[offset] = ClampToByte(blueValues[medianIndex]);
+                        resultPixels[offset + 1] = ClampToByte(greenValues[medianIndex]);
+                        resultPixels[offset + 2] = ClampToByte(redValues[medianIndex]);
                     }
                 }
 
-                image.UnlockBits(srcData);
-                result.UnlockBits(destData);
+                // 結果をコピー
+                Marshal.Copy(resultPixels, 0, dstScan0, size);
 
-                return result;
+                // リソース解放
+                image.UnlockBits(srcData);
+                resultImage.UnlockBits(dstData);
+
+                return resultImage;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error removing noise: {ex.Message}");
-                return image;
+                Debug.WriteLine($"ノイズ削減エラー: {ex.Message}");
+                return new Bitmap(image);
             }
         }
 
         /// <summary>
-        /// 閾値処理（二値化）を適用する
+        /// 二値化処理
         /// </summary>
         private static Bitmap ApplyThreshold(Bitmap image, int threshold)
         {
+            if (image == null)
+                return null;
+
             try
             {
-                Bitmap result = new Bitmap(image.Width, image.Height);
+                Bitmap resultImage = new Bitmap(image.Width, image.Height);
 
-                for (int y = 0; y < image.Height; y++)
+                int width = image.Width;
+                int height = image.Height;
+
+                // 元画像のピクセルデータを取得
+                BitmapData srcData = image.LockBits(new Rectangle(0, 0, width, height),
+                    ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+
+                // 結果画像のピクセルデータを取得
+                BitmapData dstData = resultImage.LockBits(new Rectangle(0, 0, width, height),
+                    ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+
+                int stride = srcData.Stride;
+                IntPtr srcScan0 = srcData.Scan0;
+                IntPtr dstScan0 = dstData.Scan0;
+
+                // ピクセルデータをコピー
+                int size = stride * height;
+                byte[] pixels = new byte[size];
+                byte[] resultPixels = new byte[size];
+                Marshal.Copy(srcScan0, pixels, 0, size);
+
+                // 二値化処理
+                for (int y = 0; y < height; y++)
                 {
-                    for (int x = 0; x < image.Width; x++)
+                    for (int x = 0; x < width; x++)
                     {
-                        Color pixel = image.GetPixel(x, y);
+                        int offset = y * stride + x * 4;
 
-                        // グレースケール値を計算（輝度）
-                        int grayScale = (int)(0.299 * pixel.R + 0.587 * pixel.G + 0.114 * pixel.B);
+                        byte blue = pixels[offset];
+                        byte green = pixels[offset + 1];
+                        byte red = pixels[offset + 2];
+                        byte alpha = pixels[offset + 3];
 
-                        // 閾値と比較してピクセル値を設定
-                        Color newColor = grayScale > threshold ? Color.White : Color.Black;
-                        result.SetPixel(x, y, newColor);
+                        // グレースケール変換
+                        byte gray = (byte)((red * 0.3) + (green * 0.59) + (blue * 0.11));
+
+                        // 二値化
+                        byte value = (gray > threshold) ? (byte)255 : (byte)0;
+
+                        resultPixels[offset] = value;     // Blue
+                        resultPixels[offset + 1] = value; // Green
+                        resultPixels[offset + 2] = value; // Red
+                        resultPixels[offset + 3] = alpha; // Alpha
                     }
                 }
 
-                return result;
+                // 結果をコピー
+                Marshal.Copy(resultPixels, 0, dstScan0, size);
+
+                // リソース解放
+                image.UnlockBits(srcData);
+                resultImage.UnlockBits(dstData);
+
+                return resultImage;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error applying threshold: {ex.Message}");
-                return image;
+                Debug.WriteLine($"二値化エラー: {ex.Message}");
+                return new Bitmap(image);
             }
         }
 
         /// <summary>
-        /// 画像のサイズを変更する
+        /// 画像のリサイズ
         /// </summary>
         private static Bitmap Resize(Bitmap image, float scale)
         {
+            if (image == null)
+                return null;
+
             try
             {
                 int newWidth = (int)(image.Width * scale);
                 int newHeight = (int)(image.Height * scale);
 
-                if (newWidth <= 0 || newHeight <= 0)
+                Bitmap resizedImage = new Bitmap(newWidth, newHeight);
+
+                using (Graphics g = Graphics.FromImage(resizedImage))
                 {
-                    Debug.WriteLine("Invalid scaling factor results in zero or negative dimensions");
-                    return image;
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(image, 0, 0, newWidth, newHeight);
                 }
 
-                Bitmap result = new Bitmap(newWidth, newHeight);
-
-                using (Graphics g = Graphics.FromImage(result))
-                {
-                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                    g.DrawImage(image, new Rectangle(0, 0, newWidth, newHeight));
-                }
-
-                return result;
+                return resizedImage;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error resizing image: {ex.Message}");
-                return image;
+                Debug.WriteLine($"リサイズエラー: {ex.Message}");
+                return new Bitmap(image);
             }
         }
 
         /// <summary>
-        /// 画像に余白（パディング）を追加する
+        /// 画像にパディングを追加
         /// </summary>
         private static Bitmap AddPadding(Bitmap image, int padding)
         {
+            if (image == null)
+                return null;
+
             try
             {
                 int newWidth = image.Width + (padding * 2);
                 int newHeight = image.Height + (padding * 2);
 
-                Bitmap result = new Bitmap(newWidth, newHeight);
+                Bitmap paddedImage = new Bitmap(newWidth, newHeight);
 
-                using (Graphics g = Graphics.FromImage(result))
+                using (Graphics g = Graphics.FromImage(paddedImage))
                 {
-                    g.Clear(Color.White); // 背景を白に
-                    g.DrawImage(image, padding, padding, image.Width, image.Height);
+                    g.Clear(Color.White);
+                    g.DrawImage(image, padding, padding);
                 }
 
-                return result;
+                return paddedImage;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error adding padding: {ex.Message}");
-                return image;
+                Debug.WriteLine($"パディング追加エラー: {ex.Message}");
+                return new Bitmap(image);
             }
         }
 
@@ -453,122 +584,5 @@ namespace GameTranslationOverlay.Core.Utils
         {
             return (byte)Math.Max(0, Math.Min(255, value));
         }
-
-        /// <summary>
-        /// 日本語テキスト向けの最適化プリセット
-        /// </summary>
-        public static PreprocessingOptions JapaneseTextPreset => new PreprocessingOptions
-        {
-            ApplyContrast = true,
-            ContrastLevel = 30,
-            ApplyBrightness = true,
-            BrightnessLevel = 10,
-            ApplySharpening = true,
-            SharpeningLevel = 1.5f,
-            RemoveNoise = true,
-            NoiseReductionLevel = 3,
-            ApplyThreshold = false,
-            Scale = 1.5f,
-            PaddingPixels = 5
-        };
-
-        /// <summary>
-        /// 英語テキスト向けの最適化プリセット
-        /// </summary>
-        public static PreprocessingOptions EnglishTextPreset => new PreprocessingOptions
-        {
-            ApplyContrast = true,
-            ContrastLevel = 25,
-            ApplyBrightness = true,
-            BrightnessLevel = 5,
-            ApplySharpening = true,
-            SharpeningLevel = 1.2f,
-            RemoveNoise = true,
-            NoiseReductionLevel = 3,
-            ApplyThreshold = false,
-            Scale = 1.2f,
-            PaddingPixels = 4
-        };
-
-        /// <summary>
-        /// ゲーム向け簡易プリセット（最小の処理でパフォーマンスを優先）
-        /// </summary>
-        public static PreprocessingOptions GameTextLightPreset => new PreprocessingOptions
-        {
-            ApplyContrast = true,
-            ContrastLevel = 20,
-            ApplyBrightness = false,
-            ApplySharpening = false,
-            RemoveNoise = false,
-            ApplyThreshold = false,
-            Scale = 1.0f,
-            PaddingPixels = 0
-        };
-    }
-
-    /// <summary>
-    /// 画像前処理オプション
-    /// </summary>
-    public class PreprocessingOptions
-    {
-        /// <summary>
-        /// コントラスト調整を適用するかどうか
-        /// </summary>
-        public bool ApplyContrast { get; set; } = false;
-
-        /// <summary>
-        /// コントラストレベル（-100〜100）
-        /// </summary>
-        public float ContrastLevel { get; set; } = 0;
-
-        /// <summary>
-        /// 明るさ調整を適用するかどうか
-        /// </summary>
-        public bool ApplyBrightness { get; set; } = false;
-
-        /// <summary>
-        /// 明るさレベル（-100〜100）
-        /// </summary>
-        public float BrightnessLevel { get; set; } = 0;
-
-        /// <summary>
-        /// シャープニングを適用するかどうか
-        /// </summary>
-        public bool ApplySharpening { get; set; } = false;
-
-        /// <summary>
-        /// シャープニング強度（0.0〜3.0）
-        /// </summary>
-        public float SharpeningLevel { get; set; } = 1.0f;
-
-        /// <summary>
-        /// ノイズ除去を適用するかどうか
-        /// </summary>
-        public bool RemoveNoise { get; set; } = false;
-
-        /// <summary>
-        /// ノイズ除去レベル（フィルタサイズ、3、5、7など）
-        /// </summary>
-        public int NoiseReductionLevel { get; set; } = 3;
-
-        /// <summary>
-        /// 閾値処理（二値化）を適用するかどうか
-        /// </summary>
-        public bool ApplyThreshold { get; set; } = false;
-
-        /// <summary>
-        /// 閾値レベル（0〜255）
-        /// </summary>
-        public int ThresholdLevel { get; set; } = 128;
-
-        /// <summary>
-        /// リサイズ倍率（1.0は元のサイズ）
-        /// </summary>
-        public float Scale { get; set; } = 1.0f;
-
-        /// <summary>
-        /// 追加するパディング（余白）のピクセル数
-        /// </summary>
-        public int PaddingPixels { get; set; } = 0;
     }
 }

@@ -68,10 +68,12 @@
     <Compile Include="Core\Models\WindowInfo.cs" />
     <Compile Include="Core\OCR\Benchmark\OcrBenchmark.cs" />
     <Compile Include="Core\OCR\Benchmark\OcrBenchmarkTest.cs" />
+    <Compile Include="Core\OCR\DifferenceDetector.cs" />
     <Compile Include="Core\OCR\OcrManager.cs" />
     <Compile Include="Core\OCR\OcrTest.cs" />
     <Compile Include="Core\OCR\PaddleOcrEngine.cs" />
     <Compile Include="Core\OCR\PreprocessingOptions.cs" />
+    <Compile Include="Core\OCR\SmartOcrRegionManager.cs" />
     <Compile Include="Core\OCR\TesseractOcrEngine.cs" />
     <Compile Include="Core\OCR\TextDetectionService.cs" />
     <Compile Include="Core\OCR\TextRegion.cs" />
@@ -89,10 +91,14 @@
     <Compile Include="Core\Translation\Services\TranslationManager.cs" />
     <Compile Include="Core\Translation\Utils\ErrorHandlingExtensions.cs" />
     <Compile Include="Core\UI\WindowSelector.cs" />
+    <Compile Include="Core\Utils\AdaptiveCacheManager.cs" />
     <Compile Include="Core\Utils\AdaptiveDetectionInterval.cs" />
     <Compile Include="Core\Utils\AdaptivePreprocessor.cs" />
+    <Compile Include="Core\Utils\AdaptivePreprocessorOptions.cs" />
+    <Compile Include="Core\Utils\BitmapUtils.cs" />
     <Compile Include="Core\Utils\DifferenceDetector.cs" />
     <Compile Include="Core\Utils\ImagePreprocessor.cs" />
+    <Compile Include="Core\Utils\ResourceManager.cs" />
     <Compile Include="Core\Utils\TextDetectionUtil.cs" />
     <Compile Include="Core\WindowManagement\WindowSelector.cs" />
     <Compile Include="Forms\OcrTestForm.cs">

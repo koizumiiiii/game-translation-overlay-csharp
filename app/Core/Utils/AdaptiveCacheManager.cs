@@ -89,6 +89,11 @@ namespace GameTranslationOverlay.Core.Utils
                 // 期限切れのエントリを削除
                 RemoveExpiredEntries();
 
+                // 変数を先にスコープの最初で宣言
+                TValue newValue;
+                TimeSpan itemExpiration;
+                long valueSize;
+
                 // キャッシュにエントリが存在するか確認
                 if (_cache.TryGetValue(key, out CacheItem item))
                 {
@@ -98,19 +103,19 @@ namespace GameTranslationOverlay.Core.Utils
                         _cacheMisses++;
 
                         // 値を生成
-                        TValue newValue = valueFactory();
+                        newValue = valueFactory();
 
                         // 推定サイズを更新
-                        long newSize = estimatedSize >= 0 ? estimatedSize : EstimateSize(newValue);
+                        valueSize = estimatedSize >= 0 ? estimatedSize : EstimateSize(newValue);
 
                         // 有効期限を設定
-                        TimeSpan itemExpiration = expiration ?? _defaultExpiration;
+                        itemExpiration = expiration ?? _defaultExpiration;
 
                         // キャッシュアイテムを更新
                         item.Value = newValue;
                         item.LastAccess = DateTime.Now;
                         item.Expiration = DateTime.Now + itemExpiration;
-                        item.EstimatedSize = newSize;
+                        item.EstimatedSize = valueSize;
 
                         return newValue;
                     }
@@ -137,13 +142,13 @@ namespace GameTranslationOverlay.Core.Utils
                 }
 
                 // 新しい値を生成
-                TValue newValue = valueFactory();
+                newValue = valueFactory();
 
                 // 値のサイズを推定
-                long valueSize = estimatedSize >= 0 ? estimatedSize : EstimateSize(newValue);
+                valueSize = estimatedSize >= 0 ? estimatedSize : EstimateSize(newValue);
 
                 // 有効期限を設定
-                TimeSpan itemExpiration = expiration ?? _defaultExpiration;
+                itemExpiration = expiration ?? _defaultExpiration;
 
                 // 新しいアイテムをキャッシュに追加
                 _cache[key] = new CacheItem
