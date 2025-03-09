@@ -66,53 +66,103 @@ namespace GameTranslationOverlay.Core.Utils
                 return null;
 
             if (options == null)
-                return new Bitmap(source);
+                return SafeCloneImage(source);
 
             try
             {
-                // 元の画像をコピー
-                Bitmap processedImage = new Bitmap(source);
+                // 元の画像をコピー（安全のため）
+                Bitmap processedImage = SafeCloneImage(source);
+                if (processedImage == null)
+                {
+                    Debug.WriteLine("画像のクローンに失敗しました");
+                    return null;
+                }
+
+                // リソースマネージャーに登録
+                ResourceManager.TrackResource(processedImage);
 
                 // コントラスト調整
                 if (options.ContrastLevel != 1.0f)
                 {
-                    processedImage = AdjustContrast(processedImage, options.ContrastLevel);
+                    Bitmap adjusted = AdjustContrast(processedImage, options.ContrastLevel);
+                    if (adjusted != null && adjusted != processedImage)
+                    {
+                        processedImage.Dispose();
+                        processedImage = adjusted;
+                        ResourceManager.TrackResource(processedImage);
+                    }
                 }
 
                 // 明るさ調整
                 if (options.BrightnessLevel != 1.0f)
                 {
-                    processedImage = AdjustBrightness(processedImage, options.BrightnessLevel);
+                    Bitmap adjusted = AdjustBrightness(processedImage, options.BrightnessLevel);
+                    if (adjusted != null && adjusted != processedImage)
+                    {
+                        processedImage.Dispose();
+                        processedImage = adjusted;
+                        ResourceManager.TrackResource(processedImage);
+                    }
                 }
 
                 // シャープネス調整
                 if (options.SharpnessLevel > 0)
                 {
-                    processedImage = ApplySharpen(processedImage, options.SharpnessLevel);
+                    Bitmap adjusted = ApplySharpen(processedImage, options.SharpnessLevel);
+                    if (adjusted != null && adjusted != processedImage)
+                    {
+                        processedImage.Dispose();
+                        processedImage = adjusted;
+                        ResourceManager.TrackResource(processedImage);
+                    }
                 }
 
                 // ノイズ軽減
                 if (options.NoiseReduction > 0)
                 {
-                    processedImage = ReduceNoise(processedImage, options.NoiseReduction);
+                    Bitmap adjusted = ReduceNoise(processedImage, options.NoiseReduction);
+                    if (adjusted != null && adjusted != processedImage)
+                    {
+                        processedImage.Dispose();
+                        processedImage = adjusted;
+                        ResourceManager.TrackResource(processedImage);
+                    }
                 }
 
                 // 二値化処理
                 if (options.Threshold > 0)
                 {
-                    processedImage = ApplyThreshold(processedImage, options.Threshold);
+                    Bitmap adjusted = ApplyThreshold(processedImage, options.Threshold);
+                    if (adjusted != null && adjusted != processedImage)
+                    {
+                        processedImage.Dispose();
+                        processedImage = adjusted;
+                        ResourceManager.TrackResource(processedImage);
+                    }
                 }
 
                 // スケーリング
                 if (options.ScaleFactor != 1.0f)
                 {
-                    processedImage = Resize(processedImage, options.ScaleFactor);
+                    Bitmap adjusted = Resize(processedImage, options.ScaleFactor);
+                    if (adjusted != null && adjusted != processedImage)
+                    {
+                        processedImage.Dispose();
+                        processedImage = adjusted;
+                        ResourceManager.TrackResource(processedImage);
+                    }
                 }
 
                 // パディング
                 if (options.Padding > 0)
                 {
-                    processedImage = AddPadding(processedImage, options.Padding);
+                    Bitmap adjusted = AddPadding(processedImage, options.Padding);
+                    if (adjusted != null && adjusted != processedImage)
+                    {
+                        processedImage.Dispose();
+                        processedImage = adjusted;
+                        ResourceManager.TrackResource(processedImage);
+                    }
                 }
 
                 return processedImage;
@@ -120,7 +170,7 @@ namespace GameTranslationOverlay.Core.Utils
             catch (Exception ex)
             {
                 Debug.WriteLine($"画像処理エラー: {ex.Message}");
-                return new Bitmap(source);
+                return SafeCloneImage(source);
             }
         }
 
@@ -136,7 +186,7 @@ namespace GameTranslationOverlay.Core.Utils
                 return null;
 
             if (options == null)
-                return new Bitmap(source);
+                return SafeCloneImage(source);
 
             try
             {
@@ -158,7 +208,33 @@ namespace GameTranslationOverlay.Core.Utils
             catch (Exception ex)
             {
                 Debug.WriteLine($"画像処理エラー (Utils名前空間): {ex.Message}");
-                return new Bitmap(source);
+                return SafeCloneImage(source);
+            }
+        }
+
+        /// <summary>
+        /// 安全に画像をクローンする
+        /// </summary>
+        private static Bitmap SafeCloneImage(Bitmap source)
+        {
+            if (source == null) return null;
+
+            try
+            {
+                // 新しいビットマップを作成してコピー
+                Bitmap clone = new Bitmap(source.Width, source.Height, source.PixelFormat);
+
+                using (Graphics g = Graphics.FromImage(clone))
+                {
+                    g.DrawImage(source, 0, 0, source.Width, source.Height);
+                }
+
+                return clone;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"画像クローン作成エラー: {ex.Message}");
+                return null;
             }
         }
 
@@ -201,7 +277,7 @@ namespace GameTranslationOverlay.Core.Utils
             catch (Exception ex)
             {
                 Debug.WriteLine($"コントラスト調整エラー: {ex.Message}");
-                return new Bitmap(image);
+                return SafeCloneImage(image);
             }
         }
 
@@ -243,7 +319,7 @@ namespace GameTranslationOverlay.Core.Utils
             catch (Exception ex)
             {
                 Debug.WriteLine($"明るさ調整エラー: {ex.Message}");
-                return new Bitmap(image);
+                return SafeCloneImage(image);
             }
         }
 
@@ -255,9 +331,13 @@ namespace GameTranslationOverlay.Core.Utils
             if (image == null)
                 return null;
 
+            BitmapData srcData = null;
+            BitmapData dstData = null;
+            Bitmap resultImage = null;
+
             try
             {
-                Bitmap resultImage = new Bitmap(image.Width, image.Height);
+                resultImage = new Bitmap(image.Width, image.Height);
 
                 // シャープネスのマトリックスを作成
                 float weight = Math.Min(sharpnessLevel, 1.0f);
@@ -271,11 +351,11 @@ namespace GameTranslationOverlay.Core.Utils
                 int height = image.Height;
 
                 // 元画像のピクセルデータを取得
-                BitmapData srcData = image.LockBits(new Rectangle(0, 0, width, height),
+                srcData = image.LockBits(new Rectangle(0, 0, width, height),
                     ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
 
                 // 結果画像のピクセルデータを取得
-                BitmapData dstData = resultImage.LockBits(new Rectangle(0, 0, width, height),
+                dstData = resultImage.LockBits(new Rectangle(0, 0, width, height),
                     ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
 
                 int stride = srcData.Stride;
@@ -321,25 +401,48 @@ namespace GameTranslationOverlay.Core.Utils
                         red = Math.Max(0, Math.Min(255, red));
 
                         // 安全に値を設定
-                        resultPixels[offset] = (byte)ClampToByte((int)blue);
-                        resultPixels[offset + 1] = (byte)ClampToByte((int)green);
-                        resultPixels[offset + 2] = (byte)ClampToByte((int)red);
+                        resultPixels[offset] = ClampToByte((int)blue);
+                        resultPixels[offset + 1] = ClampToByte((int)green);
+                        resultPixels[offset + 2] = ClampToByte((int)red);
                     }
                 }
 
                 // 結果をコピー
                 Marshal.Copy(resultPixels, 0, dstScan0, size);
 
-                // リソース解放
-                image.UnlockBits(srcData);
-                resultImage.UnlockBits(dstData);
-
                 return resultImage;
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"シャープネス調整エラー: {ex.Message}");
-                return new Bitmap(image);
+                if (resultImage != null)
+                {
+                    resultImage.Dispose();
+                }
+                return SafeCloneImage(image);
+            }
+            finally
+            {
+                // リソース解放
+                if (srcData != null)
+                {
+                    try { image.UnlockBits(srcData); }
+                    catch (Exception ex) { Debug.WriteLine($"UnlockBits エラー: {ex.Message}"); }
+                }
+
+                if (dstData != null && resultImage != null)
+                {
+                    try { resultImage.UnlockBits(dstData); }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"UnlockBits エラー: {ex.Message}");
+                        if (resultImage != null)
+                        {
+                            resultImage.Dispose();
+                            resultImage = null;
+                        }
+                    }
+                }
             }
         }
 
@@ -353,11 +456,15 @@ namespace GameTranslationOverlay.Core.Utils
 
             // レベルが0以下の場合、何もしない
             if (level <= 0)
-                return new Bitmap(image);
+                return SafeCloneImage(image);
+
+            BitmapData srcData = null;
+            BitmapData dstData = null;
+            Bitmap resultImage = null;
 
             try
             {
-                Bitmap resultImage = new Bitmap(image.Width, image.Height);
+                resultImage = new Bitmap(image.Width, image.Height);
 
                 int width = image.Width;
                 int height = image.Height;
@@ -367,11 +474,11 @@ namespace GameTranslationOverlay.Core.Utils
                 kernelSize = Math.Min(kernelSize, 5); // 最大サイズを制限
 
                 // 元画像のピクセルデータを取得
-                BitmapData srcData = image.LockBits(new Rectangle(0, 0, width, height),
+                srcData = image.LockBits(new Rectangle(0, 0, width, height),
                     ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
 
                 // 結果画像のピクセルデータを取得
-                BitmapData dstData = resultImage.LockBits(new Rectangle(0, 0, width, height),
+                dstData = resultImage.LockBits(new Rectangle(0, 0, width, height),
                     ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
 
                 int stride = srcData.Stride;
@@ -406,40 +513,77 @@ namespace GameTranslationOverlay.Core.Utils
                             for (int kx = -radius; kx <= radius; kx++)
                             {
                                 int pos = (y + ky) * stride + (x + kx) * 4;
-                                blueValues[index] = pixels[pos];
-                                greenValues[index] = pixels[pos + 1];
-                                redValues[index] = pixels[pos + 2];
-                                index++;
+                                if (pos >= 0 && pos < size - 2) // 境界チェック追加
+                                {
+                                    blueValues[index] = pixels[pos];
+                                    greenValues[index] = pixels[pos + 1];
+                                    redValues[index] = pixels[pos + 2];
+                                    index++;
+                                }
                             }
                         }
 
-                        // 各色のメディアン値を計算
-                        Array.Sort(blueValues);
-                        Array.Sort(greenValues);
-                        Array.Sort(redValues);
+                        // 実際に収集された値のみで配列を再サイズ
+                        if (index < blueValues.Length)
+                        {
+                            Array.Resize(ref blueValues, index);
+                            Array.Resize(ref greenValues, index);
+                            Array.Resize(ref redValues, index);
+                        }
 
-                        int medianIndex = blueValues.Length / 2;
+                        if (index > 0) // 値が収集できた場合のみ処理
+                        {
+                            // 各色のメディアン値を計算
+                            Array.Sort(blueValues);
+                            Array.Sort(greenValues);
+                            Array.Sort(redValues);
 
-                        // 安全に値を設定
-                        resultPixels[offset] = ClampToByte(blueValues[medianIndex]);
-                        resultPixels[offset + 1] = ClampToByte(greenValues[medianIndex]);
-                        resultPixels[offset + 2] = ClampToByte(redValues[medianIndex]);
+                            int medianIndex = blueValues.Length / 2;
+
+                            // 安全に値を設定
+                            resultPixels[offset] = ClampToByte(blueValues[medianIndex]);
+                            resultPixels[offset + 1] = ClampToByte(greenValues[medianIndex]);
+                            resultPixels[offset + 2] = ClampToByte(redValues[medianIndex]);
+                        }
                     }
                 }
 
                 // 結果をコピー
                 Marshal.Copy(resultPixels, 0, dstScan0, size);
 
-                // リソース解放
-                image.UnlockBits(srcData);
-                resultImage.UnlockBits(dstData);
-
                 return resultImage;
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"ノイズ削減エラー: {ex.Message}");
-                return new Bitmap(image);
+                if (resultImage != null)
+                {
+                    resultImage.Dispose();
+                }
+                return SafeCloneImage(image);
+            }
+            finally
+            {
+                // リソース解放
+                if (srcData != null)
+                {
+                    try { image.UnlockBits(srcData); }
+                    catch (Exception ex) { Debug.WriteLine($"UnlockBits エラー: {ex.Message}"); }
+                }
+
+                if (dstData != null && resultImage != null)
+                {
+                    try { resultImage.UnlockBits(dstData); }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"UnlockBits エラー: {ex.Message}");
+                        if (resultImage != null)
+                        {
+                            resultImage.Dispose();
+                            resultImage = null;
+                        }
+                    }
+                }
             }
         }
 
@@ -451,19 +595,23 @@ namespace GameTranslationOverlay.Core.Utils
             if (image == null)
                 return null;
 
+            BitmapData srcData = null;
+            BitmapData dstData = null;
+            Bitmap resultImage = null;
+
             try
             {
-                Bitmap resultImage = new Bitmap(image.Width, image.Height);
+                resultImage = new Bitmap(image.Width, image.Height);
 
                 int width = image.Width;
                 int height = image.Height;
 
                 // 元画像のピクセルデータを取得
-                BitmapData srcData = image.LockBits(new Rectangle(0, 0, width, height),
+                srcData = image.LockBits(new Rectangle(0, 0, width, height),
                     ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
 
                 // 結果画像のピクセルデータを取得
-                BitmapData dstData = resultImage.LockBits(new Rectangle(0, 0, width, height),
+                dstData = resultImage.LockBits(new Rectangle(0, 0, width, height),
                     ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
 
                 int stride = srcData.Stride;
@@ -482,38 +630,63 @@ namespace GameTranslationOverlay.Core.Utils
                     for (int x = 0; x < width; x++)
                     {
                         int offset = y * stride + x * 4;
+                        if (offset >= 0 && offset < size - 3) // 境界チェック追加
+                        {
+                            byte blue = pixels[offset];
+                            byte green = pixels[offset + 1];
+                            byte red = pixels[offset + 2];
+                            byte alpha = pixels[offset + 3];
 
-                        byte blue = pixels[offset];
-                        byte green = pixels[offset + 1];
-                        byte red = pixels[offset + 2];
-                        byte alpha = pixels[offset + 3];
+                            // グレースケール変換
+                            byte gray = (byte)((red * 0.3) + (green * 0.59) + (blue * 0.11));
 
-                        // グレースケール変換
-                        byte gray = (byte)((red * 0.3) + (green * 0.59) + (blue * 0.11));
+                            // 二値化
+                            byte value = (gray > threshold) ? (byte)255 : (byte)0;
 
-                        // 二値化
-                        byte value = (gray > threshold) ? (byte)255 : (byte)0;
-
-                        resultPixels[offset] = value;     // Blue
-                        resultPixels[offset + 1] = value; // Green
-                        resultPixels[offset + 2] = value; // Red
-                        resultPixels[offset + 3] = alpha; // Alpha
+                            resultPixels[offset] = value;     // Blue
+                            resultPixels[offset + 1] = value; // Green
+                            resultPixels[offset + 2] = value; // Red
+                            resultPixels[offset + 3] = alpha; // Alpha
+                        }
                     }
                 }
 
                 // 結果をコピー
                 Marshal.Copy(resultPixels, 0, dstScan0, size);
 
-                // リソース解放
-                image.UnlockBits(srcData);
-                resultImage.UnlockBits(dstData);
-
                 return resultImage;
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"二値化エラー: {ex.Message}");
-                return new Bitmap(image);
+                if (resultImage != null)
+                {
+                    resultImage.Dispose();
+                }
+                return SafeCloneImage(image);
+            }
+            finally
+            {
+                // リソース解放
+                if (srcData != null)
+                {
+                    try { image.UnlockBits(srcData); }
+                    catch (Exception ex) { Debug.WriteLine($"UnlockBits エラー: {ex.Message}"); }
+                }
+
+                if (dstData != null && resultImage != null)
+                {
+                    try { resultImage.UnlockBits(dstData); }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"UnlockBits エラー: {ex.Message}");
+                        if (resultImage != null)
+                        {
+                            resultImage.Dispose();
+                            resultImage = null;
+                        }
+                    }
+                }
             }
         }
 
@@ -530,6 +703,13 @@ namespace GameTranslationOverlay.Core.Utils
                 int newWidth = (int)(image.Width * scale);
                 int newHeight = (int)(image.Height * scale);
 
+                // サイズ検証（異常なサイズを防止）
+                if (newWidth <= 0 || newHeight <= 0 || newWidth > 10000 || newHeight > 10000)
+                {
+                    Debug.WriteLine($"異常なリサイズサイズ: {newWidth}x{newHeight}");
+                    return SafeCloneImage(image);
+                }
+
                 Bitmap resizedImage = new Bitmap(newWidth, newHeight);
 
                 using (Graphics g = Graphics.FromImage(resizedImage))
@@ -543,7 +723,7 @@ namespace GameTranslationOverlay.Core.Utils
             catch (Exception ex)
             {
                 Debug.WriteLine($"リサイズエラー: {ex.Message}");
-                return new Bitmap(image);
+                return SafeCloneImage(image);
             }
         }
 
@@ -557,6 +737,13 @@ namespace GameTranslationOverlay.Core.Utils
 
             try
             {
+                // パディング検証（異常な値を防止）
+                if (padding < 0 || padding > 100)
+                {
+                    Debug.WriteLine($"異常なパディング値: {padding}");
+                    return SafeCloneImage(image);
+                }
+
                 int newWidth = image.Width + (padding * 2);
                 int newHeight = image.Height + (padding * 2);
 
@@ -573,7 +760,7 @@ namespace GameTranslationOverlay.Core.Utils
             catch (Exception ex)
             {
                 Debug.WriteLine($"パディング追加エラー: {ex.Message}");
-                return new Bitmap(image);
+                return SafeCloneImage(image);
             }
         }
 

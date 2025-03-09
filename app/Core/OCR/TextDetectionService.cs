@@ -62,6 +62,15 @@ namespace GameTranslationOverlay.Core.OCR
         private readonly SmartOcrRegionManager _regionManager;
         private bool _useSmartRegions = true;
 
+        // 処理のキャンセル制御
+        private bool _processingActive = false;
+
+        // リソースモニタリング
+        private readonly Stopwatch _processingStopwatch = new Stopwatch();
+        private long _totalProcessingTime = 0;
+        private int _processedFrames = 0;
+        private DateTime _lastResourceCheckTime = DateTime.MinValue;
+        private const int RESOURCE_CHECK_INTERVAL_MS = 10000; // 10秒ごとにリソースチェック
 
         /// <summary>
         /// 翻訳先言語の設定（最適化のため）
@@ -251,6 +260,23 @@ namespace GameTranslationOverlay.Core.OCR
         /// </summary>
         private async void DetectionTimer_Tick(object sender, EventArgs e)
         {
+            // 処理が重複しないようにチェック
+            if (_processingActive)
+            {
+                Debug.WriteLine("前回の処理が完了していないためスキップします");
+                return;
+            }
+
+            // リソースチェック（定期的）
+            if ((DateTime.Now - _lastResourceCheckTime).TotalMilliseconds > RESOURCE_CHECK_INTERVAL_MS)
+            {
+                ResourceManager.CleanupDeadReferences();
+                _lastResourceCheckTime = DateTime.Now;
+            }
+
+            _processingActive = true;
+            _processingStopwatch.Restart();
+
             try
             {
                 // タイマーを一時停止
@@ -274,9 +300,13 @@ namespace GameTranslationOverlay.Core.OCR
                     return;
                 }
 
-                // ウィンドウ全体をキャプチャ
-                using (Bitmap windowCapture = ScreenCapture.CaptureWindow(_targetWindowHandle))
+                Bitmap windowCapture = null;
+
+                try
                 {
+                    // ウィンドウ全体をキャプチャ
+                    windowCapture = ScreenCapture.CaptureWindow(_targetWindowHandle);
+
                     if (windowCapture == null)
                     {
                         Debug.WriteLine("ウィンドウキャプチャに失敗しました");
@@ -337,9 +367,12 @@ namespace GameTranslationOverlay.Core.OCR
                                         continue;
                                     }
 
-                                    // 部分画像を切り出し
-                                    using (Bitmap regionBitmap = new Bitmap(safeRegion.Width, safeRegion.Height))
+                                    Bitmap regionBitmap = null;
+
+                                    try
                                     {
+                                        // 部分画像を切り出し
+                                        regionBitmap = new Bitmap(safeRegion.Width, safeRegion.Height);
                                         ResourceManager.TrackResource(regionBitmap);
 
                                         // 部分画像を作成
@@ -366,9 +399,19 @@ namespace GameTranslationOverlay.Core.OCR
                                         }
 
                                         allRegions.AddRange(regionTexts);
-
-                                        // リソース解放
-                                        ResourceManager.ReleaseResource(regionBitmap);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Debug.WriteLine($"領域処理エラー: {ex.Message}");
+                                    }
+                                    finally
+                                    {
+                                        // 必ず解放
+                                        if (regionBitmap != null)
+                                        {
+                                            ResourceManager.ReleaseResource(regionBitmap);
+                                            regionBitmap = null;
+                                        }
                                     }
                                 }
 
@@ -486,9 +529,15 @@ namespace GameTranslationOverlay.Core.OCR
                             DetectionInterval = _adaptiveInterval.GetCurrentInterval();
                         }
                     }
-
-                    // リソース解放を促進
-                    ResourceManager.ReleaseResource(windowCapture);
+                }
+                finally
+                {
+                    // キャプチャ画像の確実な解放
+                    if (windowCapture != null)
+                    {
+                        ResourceManager.ReleaseResource(windowCapture);
+                        windowCapture = null;
+                    }
                 }
             }
             catch (Exception ex)
@@ -512,6 +561,24 @@ namespace GameTranslationOverlay.Core.OCR
             }
             finally
             {
+                // 処理時間を記録
+                _processingStopwatch.Stop();
+                _totalProcessingTime += _processingStopwatch.ElapsedMilliseconds;
+                _processedFrames++;
+
+                if (_processedFrames % 10 == 0)
+                {
+                    long avgProcessingTime = _totalProcessingTime / _processedFrames;
+                    Debug.WriteLine($"平均処理時間: {avgProcessingTime}ms ({_processedFrames}フレーム)");
+
+                    // メモリ使用状況をチェック
+                    int resourceCount = ResourceManager.GetResourceCount();
+                    Debug.WriteLine($"リソースカウント: {resourceCount}");
+                }
+
+                // 処理完了フラグを解除
+                _processingActive = false;
+
                 // タイマーを再開（オブジェクトが破棄されていない場合のみ）
                 if (!_disposed && _isRunning && _targetWindowHandle != IntPtr.Zero)
                 {
@@ -623,6 +690,36 @@ namespace GameTranslationOverlay.Core.OCR
         }
 
         /// <summary>
+        /// リソース使用状況のチェックと最適化
+        /// </summary>
+        private void CheckResourceUsage()
+        {
+            try
+            {
+                // リソースカウントが高すぎる場合、クリーンアップを実行
+                int resourceCount = ResourceManager.GetResourceCount();
+                if (resourceCount > 100)
+                {
+                    Debug.WriteLine($"リソース数が多いため({resourceCount})、クリーンアップを実行します");
+                    int cleaned = ResourceManager.CleanupDeadReferences();
+                    Debug.WriteLine($"{cleaned}個のリソース参照をクリーンアップしました");
+                }
+
+                // メモリ使用量が高すぎる場合、GCを促進
+                long memoryUsage = GC.GetTotalMemory(false) / (1024 * 1024); // MB単位
+                if (memoryUsage > 300) // 300MB以上でクリーンアップ
+                {
+                    Debug.WriteLine($"メモリ使用量が高いため({memoryUsage}MB)、クリーンアップを実行します");
+                    ResourceManager.PerformEmergencyCleanup();
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"リソースチェック中にエラー: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// テキスト領域検出イベント
         /// </summary>
         public event EventHandler<List<TextRegion>> OnRegionsDetected;
@@ -664,6 +761,10 @@ namespace GameTranslationOverlay.Core.OCR
 
                     // 領域マネージャーをリセット
                     _regionManager?.Reset();
+
+                    // 検出領域をクリア
+                    _detectedRegions?.Clear();
+                    _detectedRegions = null;
                 }
 
                 // アンマネージドリソースの破棄（必要に応じて）

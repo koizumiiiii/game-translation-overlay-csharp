@@ -1,286 +1,159 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 using System.Threading;
 
 namespace GameTranslationOverlay.Core.Utils
 {
     /// <summary>
-    /// アプリケーション全体のリソース管理を担当するクラス。
-    /// Disposeが必要なリソースを追跡し、必要に応じて解放します。
-    /// メモリ管理の最適化に貢献します。
+    /// アプリケーション全体のリソース管理を行うクラス
+    /// メモリリークを防止し、リソースの適切な解放を保証します
     /// </summary>
     public static class ResourceManager
     {
-        // 追跡中のリソースへの弱参照を保持するリスト
-        private static readonly List<WeakReference<IDisposable>> _trackedResources = new List<WeakReference<IDisposable>>();
-
-        // 同時アクセスのためのロックオブジェクト
-        private static readonly object _resourceLock = new object();
-
-        // 統計情報
-        private static int _totalTrackedCount = 0;
-        private static int _totalReleasedCount = 0;
-        private static int _totalCleanupCalls = 0;
+        private static readonly object _lockObject = new object();
+        private static readonly HashSet<WeakReference> _trackedResources = new HashSet<WeakReference>();
+        private static int _resourceCount = 0;
         private static DateTime _lastCleanupTime = DateTime.MinValue;
 
-        // 自動クリーンアップの閾値（追跡リソース数）
-        private const int AutoCleanupThreshold = 100;
-
-        // 最後のクリーンアップから経過すべき最小時間（ミリ秒）
-        private const int MinCleanupIntervalMs = 10000; // 10秒
+        // 自動クリーンアップの間隔（10秒）
+        private const int AUTO_CLEANUP_INTERVAL_MS = 10000;
 
         /// <summary>
-        /// リソースを追跡対象として登録します
+        /// リソースを追跡対象に追加
         /// </summary>
-        /// <param name="resource">追跡するリソース（IDisposableを実装したオブジェクト）</param>
+        /// <param name="resource">追跡対象のリソース（IDisposableを実装していること）</param>
         public static void TrackResource(IDisposable resource)
         {
             if (resource == null)
                 return;
 
-            lock (_resourceLock)
+            lock (_lockObject)
             {
-                // 既に解放されたリソースを除去（リスト整理）
-                CleanupDeadReferences();
-
-                // 新しいリソースを追加
-                _trackedResources.Add(new WeakReference<IDisposable>(resource));
-                _totalTrackedCount++;
-
-                // 追跡リソース数が多い場合、自動クリーンアップを検討
-                if (_trackedResources.Count > AutoCleanupThreshold &&
-                    (DateTime.Now - _lastCleanupTime).TotalMilliseconds > MinCleanupIntervalMs)
+                // 大量のリソースが追加された場合、自動的にクリーンアップを実行
+                if (_resourceCount > 100 || (DateTime.Now - _lastCleanupTime).TotalMilliseconds > AUTO_CLEANUP_INTERVAL_MS)
                 {
-                    PerformCleanup();
+                    CleanupDeadReferences();
+                }
+
+                _trackedResources.Add(new WeakReference(resource));
+                _resourceCount++;
+
+                if (_resourceCount % 10 == 0)
+                {
+                    Debug.WriteLine($"ResourceManager: {_resourceCount}個のリソースを追跡中");
                 }
             }
         }
 
         /// <summary>
-        /// リソースを手動で解放し、追跡リストから削除します
+        /// 特定のリソースを解放
         /// </summary>
         /// <param name="resource">解放するリソース</param>
-        /// <returns>解放に成功した場合はtrue</returns>
-        public static bool ReleaseResource(IDisposable resource)
+        public static void ReleaseResource(IDisposable resource)
         {
             if (resource == null)
-                return false;
-
-            bool released = false;
-
-            lock (_resourceLock)
-            {
-                // マッチするWeakReferenceを探す
-                WeakReference<IDisposable> matchingRef = null;
-
-                foreach (var weakRef in _trackedResources)
-                {
-                    IDisposable target;
-                    if (weakRef.TryGetTarget(out target) && target == resource)
-                    {
-                        matchingRef = weakRef;
-                        break;
-                    }
-                }
-
-                // 見つかったら削除してDisposeを呼び出す
-                if (matchingRef != null)
-                {
-                    _trackedResources.Remove(matchingRef);
-
-                    try
-                    {
-                        resource.Dispose();
-                        released = true;
-                        _totalReleasedCount++;
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"リソース解放エラー: {ex.Message}");
-                    }
-                }
-            }
-
-            return released;
-        }
-
-        /// <summary>
-        /// 追跡リストから既に解放されたリソースへの参照を削除
-        /// </summary>
-        private static void CleanupDeadReferences()
-        {
-            // 削除対象の参照を収集
-            List<WeakReference<IDisposable>> toRemove = new List<WeakReference<IDisposable>>();
-
-            foreach (var weakRef in _trackedResources)
-            {
-                IDisposable resource;
-                if (!weakRef.TryGetTarget(out resource) || resource == null)
-                {
-                    toRemove.Add(weakRef);
-                }
-            }
-
-            // 無効な参照を削除
-            foreach (var deadRef in toRemove)
-            {
-                _trackedResources.Remove(deadRef);
-            }
-
-            if (toRemove.Count > 0)
-            {
-                Debug.WriteLine($"{toRemove.Count}個の無効なリソース参照を削除しました");
-            }
-        }
-
-        /// <summary>
-        /// メモリ使用量が高い場合や明示的に呼び出された場合に、積極的にリソースを解放します
-        /// </summary>
-        public static void PerformCleanup()
-        {
-            if ((DateTime.Now - _lastCleanupTime).TotalMilliseconds < MinCleanupIntervalMs)
-            {
-                // 前回のクリーンアップから十分な時間が経過していない場合はスキップ
                 return;
-            }
 
-            lock (_resourceLock)
+            try
             {
-                _totalCleanupCalls++;
-                _lastCleanupTime = DateTime.Now;
+                resource.Dispose();
 
-                // 無効な参照を削除
-                CleanupDeadReferences();
-
-                // Bitmap資源を優先的に解放（長時間追跡されているもの）
-                List<WeakReference<IDisposable>> oldBitmaps = new List<WeakReference<IDisposable>>();
-
-                foreach (var weakRef in _trackedResources)
+                lock (_lockObject)
                 {
-                    IDisposable resource;
-                    if (weakRef.TryGetTarget(out resource) && resource is System.Drawing.Bitmap)
-                    {
-                        oldBitmaps.Add(weakRef);
-                    }
+                    // 対応する弱参照を削除（必須ではないが、メモリ効率のため）
+                    _trackedResources.RemoveWhere(wr =>
+                        wr.IsAlive && wr.Target == resource);
                 }
-
-                // 古いBitmapの一部を解放（半分程度）
-                int releaseCount = oldBitmaps.Count / 2;
-
-                for (int i = 0; i < releaseCount && i < oldBitmaps.Count; i++)
-                {
-                    IDisposable resource;
-                    if (oldBitmaps[i].TryGetTarget(out resource) && resource != null)
-                    {
-                        try
-                        {
-                            resource.Dispose();
-                            _totalReleasedCount++;
-                        }
-                        catch (Exception ex)
-                        {
-                            Debug.WriteLine($"Bitmap解放エラー: {ex.Message}");
-                        }
-                    }
-
-                    _trackedResources.Remove(oldBitmaps[i]);
-                }
-
-                if (releaseCount > 0)
-                {
-                    Debug.WriteLine($"クリーンアップ: {releaseCount}個のBitmapリソースを解放しました");
-
-                    // GCを促進
-                    GC.Collect(0, GCCollectionMode.Optimized);
-                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"ResourceManager: リソース解放中にエラー: {ex.Message}");
             }
         }
 
         /// <summary>
-        /// 全ての追跡リソースを解放します（アプリケーション終了時などに使用）
+        /// 不要な参照のクリーンアップ
         /// </summary>
-        public static void DisposeAll()
+        /// <returns>削除された参照の数</returns>
+        public static int CleanupDeadReferences()
         {
-            lock (_resourceLock)
+            lock (_lockObject)
+            {
+                int initialCount = _trackedResources.Count;
+                int removed = _trackedResources.RemoveWhere(wr => !wr.IsAlive);
+
+                if (removed > 0)
+                {
+                    _resourceCount -= removed;
+                    Debug.WriteLine($"ResourceManager: {removed}個の無効なリソース参照を削除しました");
+                }
+
+                _lastCleanupTime = DateTime.Now;
+                return removed;
+            }
+        }
+
+        /// <summary>
+        /// すべてのリソースの解放
+        /// </summary>
+        /// <returns>解放されたリソースの数</returns>
+        public static int DisposeAll()
+        {
+            lock (_lockObject)
             {
                 int disposedCount = 0;
-                int failedCount = 0;
 
-                foreach (var weakRef in _trackedResources)
+                foreach (var wr in _trackedResources)
                 {
-                    IDisposable resource;
-                    if (weakRef.TryGetTarget(out resource) && resource != null)
+                    if (wr.IsAlive && wr.Target is IDisposable disposable)
                     {
                         try
                         {
-                            resource.Dispose();
+                            disposable.Dispose();
                             disposedCount++;
                         }
                         catch (Exception ex)
                         {
-                            Debug.WriteLine($"リソース解放エラー: {ex.Message}");
-                            failedCount++;
+                            Debug.WriteLine($"ResourceManager: リソース解放中にエラー: {ex.Message}");
                         }
                     }
                 }
 
                 _trackedResources.Clear();
+                int oldCount = _resourceCount;
+                _resourceCount = 0;
 
-                Debug.WriteLine($"全リソース解放: 成功={disposedCount}, 失敗={failedCount}");
+                Debug.WriteLine($"ResourceManager: {disposedCount}/{oldCount}個のリソースを解放しました");
+                return disposedCount;
             }
         }
 
         /// <summary>
-        /// 追跡中のリソース数を取得します
+        /// 現在追跡中のリソース数を取得
         /// </summary>
-        /// <returns>追跡中のリソース数</returns>
-        public static int GetActiveResourceCount()
+        public static int GetResourceCount()
         {
-            lock (_resourceLock)
+            lock (_lockObject)
             {
-                int count = 0;
-
-                foreach (var weakRef in _trackedResources)
-                {
-                    IDisposable resource;
-                    if (weakRef.TryGetTarget(out resource) && resource != null)
-                    {
-                        count++;
-                    }
-                }
-
-                return count;
+                return _resourceCount;
             }
         }
 
         /// <summary>
-        /// 統計情報を取得します
+        /// メモリ圧迫時の緊急クリーンアップ
+        /// GCも強制的に実行
         /// </summary>
-        /// <returns>統計情報を含む文字列</returns>
-        public static string GetStatistics()
+        public static void PerformEmergencyCleanup()
         {
-            lock (_resourceLock)
-            {
-                int activeCount = GetActiveResourceCount();
+            Debug.WriteLine("ResourceManager: 緊急クリーンアップを実行します");
 
-                return string.Format(
-                    "ResourceManager 統計:\n" +
-                    "追跡リソース数: {0}\n" +
-                    "有効リソース数: {1}\n" +
-                    "これまでの追跡数: {2}\n" +
-                    "解放した数: {3}\n" +
-                    "クリーンアップ実行数: {4}\n" +
-                    "最終クリーンアップ: {5}",
-                    _trackedResources.Count,
-                    activeCount,
-                    _totalTrackedCount,
-                    _totalReleasedCount,
-                    _totalCleanupCalls,
-                    _lastCleanupTime != DateTime.MinValue ? _lastCleanupTime.ToString("HH:mm:ss") : "なし"
-                );
-            }
+            int disposed = DisposeAll();
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+
+            Debug.WriteLine($"ResourceManager: 緊急クリーンアップ完了 - {disposed}個のリソースを解放");
         }
     }
 }

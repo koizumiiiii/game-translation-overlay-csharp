@@ -30,6 +30,9 @@ namespace GameTranslationOverlay.Core.OCR
         private bool _disposed = false;
         private readonly Stopwatch _stopwatch = new Stopwatch();
 
+        // 最大画像次元サイズ（メモリオーバーフロー防止）
+        private const int MAX_IMAGE_DIMENSION = 3840; // 4K解像度を上限に
+
         /// <summary>
         /// コンストラクタ
         /// </summary>
@@ -74,17 +77,27 @@ namespace GameTranslationOverlay.Core.OCR
                 return true;
             }
 
-            // 画像の差分を計算
-            double difference;
-            if (_useHighQualityDetection)
+            // 画像サイズチェック（メモリオーバーフロー防止）
+            if (IsTooLargeImage(currentImage))
             {
-                // 高精度検出モード（より詳細な比較、CPU負荷が高い）
-                difference = CalculateDetailedDifference(currentImage, _previousImage);
+                Debug.WriteLine($"DifferenceDetector: 画像が大きすぎます ({currentImage.Width}x{currentImage.Height})");
+                return true; // 安全のため変化ありとみなす
             }
-            else
+
+            // 画像の差分を計算（オリジナル画像でなくコピーを使用）
+            double difference;
+            using (Bitmap currentCopy = SafeCloneImage(currentImage))
             {
-                // 標準検出モード（効率優先）
-                difference = CalculateFastDifference(currentImage, _previousImage);
+                if (_useHighQualityDetection)
+                {
+                    // 高精度検出モード（より詳細な比較、CPU負荷が高い）
+                    difference = CalculateDetailedDifference(currentCopy, _previousImage);
+                }
+                else
+                {
+                    // 標準検出モード（効率優先）
+                    difference = CalculateFastDifference(currentCopy, _previousImage);
+                }
             }
 
             bool hasSignificantChange = difference > _differenceThreshold;
@@ -108,6 +121,41 @@ namespace GameTranslationOverlay.Core.OCR
         }
 
         /// <summary>
+        /// 安全に画像をクローンする
+        /// </summary>
+        private Bitmap SafeCloneImage(Bitmap source)
+        {
+            if (source == null) return null;
+
+            try
+            {
+                // 新しいビットマップを作成してコピー
+                Bitmap clone = new Bitmap(source.Width, source.Height, source.PixelFormat);
+
+                using (Graphics g = Graphics.FromImage(clone))
+                {
+                    g.DrawImage(source, 0, 0, source.Width, source.Height);
+                }
+
+                return clone;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"画像クローン作成エラー: {ex.Message}");
+                // 失敗した場合は元の参照を返す（理想的ではないが、エラーを防ぐ）
+                return new Bitmap(source);
+            }
+        }
+
+        /// <summary>
+        /// 画像が処理に適したサイズか確認
+        /// </summary>
+        private bool IsTooLargeImage(Bitmap image)
+        {
+            return image.Width > MAX_IMAGE_DIMENSION || image.Height > MAX_IMAGE_DIMENSION;
+        }
+
+        /// <summary>
         /// 高速な差分計算（サンプリングポイントによる比較）
         /// </summary>
         private double CalculateFastDifference(Bitmap current, Bitmap previous)
@@ -116,18 +164,29 @@ namespace GameTranslationOverlay.Core.OCR
             int differentPixels = 0;
             int totalSamples = 0;
 
-            int stepX = Math.Max(1, current.Width / _sampleSize);
-            int stepY = Math.Max(1, current.Height / _sampleSize);
+            // より安全なサンプリングステップの計算（ゼロ除算防止）
+            int stepX = Math.Max(1, current.Width / Math.Max(1, _sampleSize));
+            int stepY = Math.Max(1, current.Height / Math.Max(1, _sampleSize));
+
+            BitmapData currentData = null;
+            BitmapData previousData = null;
 
             try
             {
                 // LockBitsを使用した高速なピクセルアクセス
                 Rectangle rect = new Rectangle(0, 0, current.Width, current.Height);
-                BitmapData currentData = current.LockBits(rect, ImageLockMode.ReadOnly, current.PixelFormat);
-                BitmapData previousData = previous.LockBits(rect, ImageLockMode.ReadOnly, previous.PixelFormat);
+                currentData = current.LockBits(rect, ImageLockMode.ReadOnly, current.PixelFormat);
+                previousData = previous.LockBits(rect, ImageLockMode.ReadOnly, previous.PixelFormat);
 
                 int bytesPerPixel = Image.GetPixelFormatSize(current.PixelFormat) / 8;
                 int byteCount = currentData.Stride * current.Height;
+
+                // バッファサイズの検証（安全対策）
+                if (byteCount <= 0 || byteCount > 100 * 1024 * 1024) // 100MB上限
+                {
+                    Debug.WriteLine($"バッファサイズ異常: {byteCount} bytes");
+                    return 1.0; // 変化ありとみなす
+                }
 
                 byte[] currentPixels = new byte[byteCount];
                 byte[] previousPixels = new byte[byteCount];
@@ -162,15 +221,26 @@ namespace GameTranslationOverlay.Core.OCR
                         }
                     }
                 }
-
-                // 必ずアンロック
-                current.UnlockBits(currentData);
-                previous.UnlockBits(previousData);
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"差分計算エラー: {ex.Message}");
                 return 1.0; // エラー時は変化ありとみなす
+            }
+            finally
+            {
+                // 確実にビットマップデータをアンロック
+                if (currentData != null)
+                {
+                    try { current.UnlockBits(currentData); }
+                    catch (Exception ex) { Debug.WriteLine($"UnlockBits エラー: {ex.Message}"); }
+                }
+
+                if (previousData != null)
+                {
+                    try { previous.UnlockBits(previousData); }
+                    catch (Exception ex) { Debug.WriteLine($"UnlockBits エラー: {ex.Message}"); }
+                }
             }
 
             return totalSamples == 0 ? 1.0 : (double)differentPixels / totalSamples;
@@ -187,18 +257,28 @@ namespace GameTranslationOverlay.Core.OCR
             int totalPixels = 0;
 
             // 全ピクセルではなく、グリッド状にサンプリング（パフォーマンスのため）
-            int stepX = Math.Max(1, width / (_sampleSize * 2)); // 高品質モードはより密なサンプリング
-            int stepY = Math.Max(1, height / (_sampleSize * 2));
+            int stepX = Math.Max(1, width / Math.Max(1, _sampleSize * 2)); // 高品質モードはより密なサンプリング
+            int stepY = Math.Max(1, height / Math.Max(1, _sampleSize * 2));
+
+            BitmapData currentData = null;
+            BitmapData previousData = null;
 
             try
             {
                 // LockBitsを使用した高速なピクセルアクセス
                 Rectangle rect = new Rectangle(0, 0, width, height);
-                BitmapData currentData = current.LockBits(rect, ImageLockMode.ReadOnly, current.PixelFormat);
-                BitmapData previousData = previous.LockBits(rect, ImageLockMode.ReadOnly, previous.PixelFormat);
+                currentData = current.LockBits(rect, ImageLockMode.ReadOnly, current.PixelFormat);
+                previousData = previous.LockBits(rect, ImageLockMode.ReadOnly, previous.PixelFormat);
 
                 int bytesPerPixel = Image.GetPixelFormatSize(current.PixelFormat) / 8;
                 int byteCount = currentData.Stride * height;
+
+                // バッファサイズの検証（安全対策）
+                if (byteCount <= 0 || byteCount > 100 * 1024 * 1024) // 100MB上限
+                {
+                    Debug.WriteLine($"バッファサイズ異常: {byteCount} bytes");
+                    return 1.0; // 変化ありとみなす
+                }
 
                 byte[] currentPixels = new byte[byteCount];
                 byte[] previousPixels = new byte[byteCount];
@@ -234,15 +314,26 @@ namespace GameTranslationOverlay.Core.OCR
                         }
                     }
                 }
-
-                // 必ずアンロック
-                current.UnlockBits(currentData);
-                previous.UnlockBits(previousData);
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"詳細差分計算エラー: {ex.Message}");
                 return 1.0; // エラー時は変化ありとみなす
+            }
+            finally
+            {
+                // 確実にビットマップデータをアンロック
+                if (currentData != null)
+                {
+                    try { current.UnlockBits(currentData); }
+                    catch (Exception ex) { Debug.WriteLine($"UnlockBits エラー: {ex.Message}"); }
+                }
+
+                if (previousData != null)
+                {
+                    try { previous.UnlockBits(previousData); }
+                    catch (Exception ex) { Debug.WriteLine($"UnlockBits エラー: {ex.Message}"); }
+                }
             }
 
             return totalPixels == 0 ? 1.0 : (double)differentPixels / totalPixels;
@@ -258,8 +349,8 @@ namespace GameTranslationOverlay.Core.OCR
 
             try
             {
-                // 新しい画像をコピーして保存
-                _previousImage = new Bitmap(current);
+                // 新しい画像をコピーして保存（元の画像に依存しない）
+                _previousImage = SafeCloneImage(current);
 
                 // ResourceManagerに追跡させる（メモリ管理の最適化）
                 ResourceManager.TrackResource(_previousImage);
