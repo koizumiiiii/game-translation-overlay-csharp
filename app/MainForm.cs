@@ -752,11 +752,12 @@ namespace GameTranslationOverlay
         };
 
                 // 各前処理オプションのテスト
+                // 各前処理オプションのテスト
                 var preprocessingOptions = new UtilsNamespace.PreprocessingOptions[] {
                     null, // デフォルト（前処理なし）
-                    UtilsNamespace.ImagePreprocessor.JapaneseTextPreset,
-                    UtilsNamespace.ImagePreprocessor.EnglishTextPreset,
-                    UtilsNamespace.ImagePreprocessor.GameTextLightPreset
+                    UtilsNamespace.PreprocessingOptions.FromOcrOptions(UtilsNamespace.ImagePreprocessor.JapaneseTextPreset),
+                    UtilsNamespace.PreprocessingOptions.FromOcrOptions(UtilsNamespace.ImagePreprocessor.EnglishTextPreset),
+                    UtilsNamespace.PreprocessingOptions.FromOcrOptions(UtilsNamespace.ImagePreprocessor.GameTextLightPreset)
                 };
 
                 string[] optionNames = { "Default", "Japanese Preset", "English Preset", "Light Preset" };

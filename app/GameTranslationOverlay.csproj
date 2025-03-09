@@ -98,6 +98,7 @@
     <Compile Include="Core\Utils\BitmapUtils.cs" />
     <Compile Include="Core\Utils\DifferenceDetector.cs" />
     <Compile Include="Core\Utils\ImagePreprocessor.cs" />
+    <Compile Include="Core\Utils\PreprocessingOptions.cs" />
     <Compile Include="Core\Utils\ResourceManager.cs" />
     <Compile Include="Core\Utils\TextDetectionUtil.cs" />
     <Compile Include="Core\WindowManagement\WindowSelector.cs" />
