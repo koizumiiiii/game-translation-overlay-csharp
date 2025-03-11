@@ -5,6 +5,7 @@ using System.Windows.Forms;
 using GameTranslationOverlay.Core.OCR;
 using GameTranslationOverlay.Core.Utils;
 using GameTranslationOverlay.Forms;
+using GameTranslationOverlay.Core.Diagnostics;
 
 namespace GameTranslationOverlay
 {
@@ -44,6 +45,9 @@ namespace GameTranslationOverlay
                 // ディレクトリの確認と作成
                 EnsureApplicationDirectories();
 
+                // Loggerの初期化
+                InitializeLogger();
+
                 // アプリケーション終了時の処理を設定
                 Application.ApplicationExit += (s, e) =>
                 {
@@ -68,6 +72,33 @@ namespace GameTranslationOverlay
             }
         }
 
+        /// <summary>
+        /// Loggerを初期化
+        /// </summary>
+        private static void InitializeLogger()
+        {
+            try
+            {
+                Debug.WriteLine("Loggerを初期化しています...");
+                
+                // ログディレクトリの取得
+                string logDir = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "GameTranslationOverlay",
+                    "Logs");
+                
+                // Loggerの初期化
+                Logger.Instance.Initialize(logDir, Logger.LogLevel.Debug);
+                
+                Debug.WriteLine("Loggerの初期化が完了しました");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Loggerの初期化に失敗しました: {ex.Message}");
+                // ロガー初期化失敗はクリティカルではないため、例外を再スローしない
+            }
+        }
+        
         /// <summary>
         /// OCRマネージャーを初期化
         /// </summary>
@@ -143,6 +174,10 @@ namespace GameTranslationOverlay
                 // ResourceManagerのリソース解放
                 int disposedCount = ResourceManager.DisposeAll();
                 Debug.WriteLine($"{disposedCount}個のリソースを解放しました");
+
+                // Loggerのシャットダウン
+                Logger.Instance.Shutdown();
+                Debug.WriteLine("Loggerをシャットダウンしました");
 
                 // 明示的なGC実行（通常は必要ないが、終了時は安全のため）
                 GC.Collect();
@@ -243,6 +278,9 @@ namespace GameTranslationOverlay
         {
             try
             {
+                // Loggerを使用してエラーログを記録
+                Logger.Instance.LogError($"[{context}] {ex.Message}", ex);
+                
                 // エラーログディレクトリを確認
                 string logDir = System.IO.Path.GetDirectoryName(CrashLogPath);
                 if (!System.IO.Directory.Exists(logDir))

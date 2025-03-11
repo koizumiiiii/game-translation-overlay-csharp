@@ -170,6 +170,16 @@ namespace GameTranslationOverlay.Core.Diagnostics
         }
 
         /// <summary>
+        /// 情報レベルのログを記録します（LogInfo という名前でも呼び出し可能）
+        /// </summary>
+        /// <param name="message">ログメッセージ</param>
+        /// <param name="exception">例外オブジェクト（省略可）</param>
+        public void LogInfo(string message, Exception exception = null)
+        {
+            Log(LogLevel.Info, "Application", message, exception);
+        }
+
+        /// <summary>
         /// 警告レベルのログを記録します
         /// </summary>
         /// <param name="source">ログソース（クラス名など）</param>
@@ -177,6 +187,16 @@ namespace GameTranslationOverlay.Core.Diagnostics
         public void Warning(string source, string message)
         {
             Log(LogLevel.Warning, source, message);
+        }
+
+        /// <summary>
+        /// 警告レベルのログを記録します（LogWarning という名前でも呼び出し可能）
+        /// </summary>
+        /// <param name="message">ログメッセージ</param>
+        /// <param name="exception">例外オブジェクト（省略可）</param>
+        public void LogWarning(string message, Exception exception = null)
+        {
+            Log(LogLevel.Warning, "Application", message, exception);
         }
 
         /// <summary>
@@ -188,6 +208,16 @@ namespace GameTranslationOverlay.Core.Diagnostics
         public void Error(string source, string message, Exception exception = null)
         {
             Log(LogLevel.Error, source, message, exception);
+        }
+
+        /// <summary>
+        /// エラーレベルのログを記録します（LogError という名前でも呼び出し可能）
+        /// </summary>
+        /// <param name="message">ログメッセージ</param>
+        /// <param name="exception">例外オブジェクト（省略可）</param>
+        public void LogError(string message, Exception exception = null)
+        {
+            Log(LogLevel.Error, "Application", message, exception);
         }
 
         /// <summary>

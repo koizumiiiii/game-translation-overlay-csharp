@@ -6,11 +6,12 @@
 2. [開発環境の構築](#開発環境の構築)
 3. [コードの構造と設計](#コードの構造と設計)
 4. [主要コンポーネント](#主要コンポーネント)
-5. [ビルドと展開](#ビルドと展開)
-6. [テスト方法](#テスト方法)
-7. [新機能の追加](#新機能の追加)
-8. [トラブルシューティング](#トラブルシューティング)
-9. [コントリビューションガイドライン](#コントリビューションガイドライン)
+5. [診断モジュール](#診断モジュール)
+6. [ビルドと展開](#ビルドと展開)
+7. [テスト方法](#テスト方法)
+8. [新機能の追加](#新機能の追加)
+9. [トラブルシューティング](#トラブルシューティング)
+10. [コントリビューションガイドライン](#コントリビューションガイドライン)
 
 ## アーキテクチャ概要
 
@@ -92,6 +93,7 @@ game-translation-overlay/
 ├── app/                        # メインアプリケーション
 │   ├── Core/                   # コアロジック層
 │   │   ├── Configuration/      # 設定管理
+│   │   ├── Diagnostics/        # 診断機能
 │   │   ├── Licensing/          # ライセンス管理
 │   │   ├── OCR/                # OCR機能
 │   │   ├── Region/             # 画面領域管理
@@ -252,6 +254,198 @@ public class AppSettings
 }
 ```
 
+## 診断モジュール
+
+診断モジュールは、アプリケーションの動作を監視、記録、および問題発生時の回復を支援するための一連のコンポーネントです。これらのコンポーネントは `GameTranslationOverlay.Core.Diagnostics` 名前空間に実装されています。
+
+### コンポーネント構成
+
+診断モジュールは以下の4つの主要コンポーネントで構成されています：
+
+1. **Logger** - ログ記録機能
+2. **ErrorReporter** - エラー報告機能
+3. **DiagnosticsCollector** - システム・アプリケーション情報収集
+4. **RecoveryManager** - エラー回復と自動修復機能
+
+### 使用方法
+
+#### 初期化
+
+診断モジュールは以下のように初期化します：
+
+```csharp
+// Program.cs または適切な初期化場所で
+string logDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GameTranslationOverlay", "logs");
+string errorReportDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GameTranslationOverlay", "error_reports");
+string recoveryLogPath = Path.Combine(logDirectory, "recovery.log");
+
+// ロガーの初期化
+Logger.Instance.Initialize(logDirectory);
+
+// エラーレポーターの初期化
+ErrorReporter.Instance.Initialize(errorReportDirectory);
+
+// 回復マネージャーの初期化
+RecoveryManager.Instance.Initialize(recoveryLogPath);
+RecoveryManager.Instance.RegisterStandardRecoveryActions();
+```
+
+#### ログ記録
+
+アプリケーション内でのログ記録は以下のように行います：
+
+```csharp
+// 情報ログ
+Logger.Instance.Info("ClassName", "処理が正常に完了しました");
+
+// 警告ログ
+Logger.Instance.Warning("ClassName", "予期しない状態が発生しましたが、処理は継続します");
+
+// エラーログ
+try {
+    // 何らかの処理
+}
+catch (Exception ex) {
+    Logger.Instance.Error("ClassName", "処理中にエラーが発生しました", ex);
+}
+
+// 致命的エラーログ
+Logger.Instance.Fatal("ClassName", "回復不能なエラーが発生しました", exception);
+```
+
+#### エラー報告
+
+エラーを報告してレポートファイルを生成する方法：
+
+```csharp
+try {
+    // 何らかの処理
+}
+catch (Exception ex) {
+    // エラーをレポートしてファイルを生成
+    string reportPath = ErrorReporter.Instance.ReportException(ex, "ClassName", "追加情報", true);
+    
+    // reportPathにはエラーレポートのファイルパスが含まれます
+}
+```
+
+#### 診断情報の収集
+
+システムおよびアプリケーションの診断情報を収集するには：
+
+```csharp
+// システム情報の収集
+Dictionary<string, string> systemInfo = DiagnosticsCollector.Instance.CollectSystemInfo();
+
+// アプリケーション情報の収集
+Dictionary<string, string> appInfo = DiagnosticsCollector.Instance.CollectApplicationInfo();
+
+// パフォーマンス指標の収集
+Dictionary<string, string> performanceMetrics = DiagnosticsCollector.Instance.CollectPerformanceMetrics();
+
+// 診断スナップショットの作成と保存
+string snapshotPath = Path.Combine(reportDirectory, "diagnostic_snapshot.txt");
+DiagnosticsCollector.Instance.SaveDiagnosticSnapshot(snapshotPath);
+```
+
+#### エラー回復と自動修復
+
+エラー追跡と回復アクションの登録：
+
+```csharp
+// エラーを記録
+bool actionTaken = RecoveryManager.Instance.RecordError("ComponentName", exception);
+
+// カスタム回復アクションの登録
+RecoveryManager.Instance.RegisterRecoveryAction(
+    "データベース接続リセット",
+    ex => ex is System.Data.SqlClient.SqlException,
+    ex => {
+        // データベース接続をリセットするコード
+        Database.ResetConnection();
+    }
+);
+
+// セーフモードの手動切り替え
+if (criticalError) {
+    RecoveryManager.Instance.EnableSafeMode("ManualTrigger", "管理者によるセーフモード有効化");
+}
+
+// セーフモードを無効化
+RecoveryManager.Instance.DisableSafeMode();
+
+// セーフモード変更の監視
+RecoveryManager.Instance.SafeModeEnabled += (sender, args) => {
+    // セーフモードが有効になった時の処理
+    UpdateUI();
+    ShowNotification($"セーフモードが有効になりました: {args.Reason}");
+};
+```
+
+### 設計と拡張
+
+#### Logger
+
+`Logger` クラスはシングルトンパターンを採用し、5つのログレベル（Debug、Info、Warning、Error、Fatal）をサポートしています。ログはファイルに出力され、自動的にローテーションされます。
+
+拡張ポイント：
+- ログレベルのカスタマイズ
+- ファイルローテーションのポリシー変更
+- 出力先の追加（DB、クラウドなど）
+
+#### ErrorReporter
+
+`ErrorReporter` クラスはアプリケーションのクラッシュや例外を詳細なレポートとして保存します。未処理の例外をグローバルに捕捉し、分析用の情報を収集します。
+
+拡張ポイント：
+- カスタムエラーハンドラの追加
+- レポート送信機能の追加
+- エラーの重要度分類の実装
+
+#### DiagnosticsCollector
+
+`DiagnosticsCollector` クラスはシステム情報、アプリケーション情報、パフォーマンス指標を収集します。これらの情報はトラブルシューティングと問題分析に役立ちます。
+
+拡張ポイント：
+- 収集する情報の拡張
+- 定期的な収集とトレンド分析
+- カスタムパフォーマンスカウンターの追加
+
+#### RecoveryManager
+
+`RecoveryManager` クラスはエラーを追跡し、継続的なエラーが発生した場合に自動的に回復アクションを実行またはセーフモードに切り替えます。
+
+拡張ポイント：
+- カスタム回復アクションの追加
+- セーフモード時の機能制限のカスタマイズ
+- エラー閾値やタイムウィンドウの調整
+
+### 設定オプション
+
+診断モジュールは以下の設定オプションをサポートしています：
+
+#### Logger設定
+
+- **MinimumLogLevel**: 記録するログの最小レベル（デフォルト: Info）
+- **MaxLogFileSize**: ログファイルの最大サイズ（デフォルト: 5MB）
+- **MaxLogFiles**: 保持するログファイルの最大数（デフォルト: 5）
+
+#### ErrorReporter設定
+
+- **ShowErrorDialog**: エラー発生時にダイアログを表示するかどうか
+
+#### RecoveryManager設定
+
+- エラー閾値と時間枠の設定（`RecordError`メソッドのパラメータ）
+
+### ファイル場所
+
+診断モジュールで生成されるファイルは以下の場所に保存されます：
+
+- ログファイル: `%LocalAppData%\GameTranslationOverlay\logs\`
+- エラーレポート: `%LocalAppData%\GameTranslationOverlay\error_reports\`
+- 回復ログ: `%LocalAppData%\GameTranslationOverlay\logs\recovery.log`
+
 ## ビルドと展開
 
 ### ビルド構成
@@ -361,16 +555,3 @@ Visual StudioのプロファイラーまたはDotMemoryを使用してパフォ�
 - **デバッグモード**: `AppSettings.DebugModeEnabled = true`を設定して詳細なログを有効化
 - **ログ出力**: `Debug.WriteLine`の出力をVisual Studioの出力ウィンドウで確認
 - **例外処理**: 例外の詳細情報を`Debug.WriteLine`で出力
-
-### エラーログの解析
-
-```csharp
-// エラーログの例
-try
-{
-    // 処理
-}
-catch (Exception ex)
-{
-    Debug.WriteLine($"[ERROR] {ex.GetType().Name}: {ex.Message}");
-    Debug.WriteLine($"Stack

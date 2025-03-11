@@ -64,6 +64,10 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Core\Configuration\AppSettings.cs" />
+    <Compile Include="Core\Diagnostics\DiagnosticsCollector.cs" />
+    <Compile Include="Core\Diagnostics\ErrorReporter.cs" />
+    <Compile Include="Core\Diagnostics\Logger.cs" />
+    <Compile Include="Core\Diagnostics\RecoveryManager.cs" />
     <Compile Include="Core\Licensing\LicenseManager.cs" />
     <Compile Include="Core\Models\WindowInfo.cs" />
     <Compile Include="Core\OCR\Benchmark\OcrBenchmark.cs" />
@@ -79,6 +83,8 @@
     <Compile Include="Core\OCR\TextRegion.cs" />
     <Compile Include="Core\OCR\Utils\WindowsRuntimeExtensions.cs" />
     <Compile Include="Core\Security\ApiKeyProtector.cs" />
+    <Compile Include="Core\Security\ApiMultiKeyProtector.cs" />
+    <Compile Include="Core\Security\EncryptionHelper.cs" />
     <Compile Include="Core\TextDetection\LegacyTextDetectionService.cs" />
     <Compile Include="Core\Translation\Configuration\TranslationConfig.cs" />
     <Compile Include="Core\Translation\Exceptions\TranslationException.cs" />
