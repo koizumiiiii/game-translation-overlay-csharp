@@ -1,4 +1,3 @@
-// GameTranslationOverlay/Core/Security/ApiMultiKeyProtector.cs
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -63,10 +62,10 @@ namespace GameTranslationOverlay.Core.Security
 
         // プロバイダー別のキー管理
         private readonly Dictionary<ApiProvider, List<ApiKeyInfo>> _apiKeys = new Dictionary<ApiProvider, List<ApiKeyInfo>>();
-        
+
         // 設定ファイルパス
         private readonly string _keysFilePath;
-        
+
         // 最後に発生したエラー
         private string _lastError = string.Empty;
 
@@ -80,15 +79,15 @@ namespace GameTranslationOverlay.Core.Security
             string appDataPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "GameTranslationOverlay");
-                
+
             // フォルダが存在しない場合は作成
             if (!Directory.Exists(appDataPath))
             {
                 Directory.CreateDirectory(appDataPath);
             }
-            
+
             _keysFilePath = Path.Combine(appDataPath, "api_keys.dat");
-            
+
             // 初期化
             InitializeDefaultKeys();
             LoadKeys();
@@ -129,7 +128,7 @@ namespace GameTranslationOverlay.Core.Security
 
                 // 最新のキーを使用
                 var keyInfo = activeKeys.First();
-                
+
                 try
                 {
                     // Base64デコード
@@ -223,7 +222,7 @@ namespace GameTranslationOverlay.Core.Security
         /// <param name="isActive">アクティブ状態</param>
         /// <param name="newExpiration">新しい有効期限（nullの場合は更新しない）</param>
         /// <returns>更新に成功した場合はtrue</returns>
-        public bool UpdateApiKey(ApiProvider provider, string keyId, string newApiKey = null, 
+        public bool UpdateApiKey(ApiProvider provider, string keyId, string newApiKey = null,
             bool? isActive = null, DateTime? newExpiration = null)
         {
             try
@@ -296,10 +295,10 @@ namespace GameTranslationOverlay.Core.Security
 
                 // 削除する前のカウント
                 int beforeCount = _apiKeys[provider].Count;
-                
+
                 // 指定されたIDのキーを削除
                 _apiKeys[provider].RemoveAll(k => k.KeyId == keyId);
-                
+
                 // 削除後のカウントを確認
                 if (_apiKeys[provider].Count == beforeCount)
                 {
@@ -370,24 +369,24 @@ namespace GameTranslationOverlay.Core.Security
             try
             {
                 bool changedAny = false;
-                
+
                 foreach (var provider in _apiKeys.Keys.ToList())
                 {
                     int expiredCount = 0;
-                    
+
                     foreach (var key in _apiKeys[provider].Where(k => k.IsActive && k.Expiration.HasValue && k.Expiration.Value < DateTime.Now))
                     {
                         key.IsActive = false;
                         expiredCount++;
                         changedAny = true;
                     }
-                    
+
                     if (expiredCount > 0)
                     {
                         Logger.Instance.LogInfo($"Deactivated {expiredCount} expired keys for provider: {provider}");
                     }
                 }
-                
+
                 // 変更があった場合のみ保存
                 if (changedAny)
                 {
@@ -600,7 +599,7 @@ namespace GameTranslationOverlay.Core.Security
                             };
 
                             // 有効期限（オプション）
-                            if (keyInfoElement.TryGetProperty("Expiration", out var expirationElement) && 
+                            if (keyInfoElement.TryGetProperty("Expiration", out var expirationElement) &&
                                 !expirationElement.ValueKind.HasFlag(System.Text.Json.JsonValueKind.Null))
                             {
                                 keyInfo.Expiration = DateTime.Parse(expirationElement.GetString());
@@ -619,7 +618,7 @@ namespace GameTranslationOverlay.Core.Security
             {
                 _lastError = $"Error loading API keys: {ex.Message}";
                 Logger.Instance.LogError(_lastError, ex);
-                
+
                 // 読み込みに失敗した場合はデフォルト値のみを使用
                 Logger.Instance.LogWarning("Using default API keys only due to load error");
             }

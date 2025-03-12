@@ -1,4 +1,3 @@
-// GameTranslationOverlay/Core/Security/EncryptionHelper.cs
 using System;
 using System.IO;
 using System.Security.Cryptography;
@@ -14,13 +13,13 @@ namespace GameTranslationOverlay.Core.Security
     {
         // デフォルトのソルトサイズ
         private const int DefaultSaltSize = 16;
-        
+
         // デフォルトの初期化ベクトルサイズ
         private const int DefaultIvSize = 16;
-        
+
         // デフォルトの反復回数（キー生成時）
         private const int DefaultIterationCount = 10000;
-        
+
         // 暗号化キーのサイズ（ビット）
         private const int KeySize = 256;
 
@@ -290,7 +289,7 @@ namespace GameTranslationOverlay.Core.Security
                 using (var sha256 = SHA256.Create())
                 {
                     byte[] hashBytes = sha256.ComputeHash(dataToHash);
-                    
+
                     // 16進数文字列に変換
                     StringBuilder sb = new StringBuilder();
                     foreach (byte b in hashBytes)

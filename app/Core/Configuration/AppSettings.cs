@@ -57,6 +57,16 @@ namespace GameTranslationOverlay.Core.Configuration
         /// </summary>
         public string CustomApiKey { get; set; } = string.Empty;
 
+        /// <summary>
+        /// OpenAI APIキー
+        /// </summary>
+        public string OpenAIApiKey { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Google Gemini APIキー
+        /// </summary>
+        public string GeminiApiKey { get; set; } = string.Empty;
+
         #endregion
 
         #region OCR設定
@@ -220,6 +230,8 @@ namespace GameTranslationOverlay.Core.Configuration
             // カスタムAPIキーとライセンスキーを保持
             string customApiKey = CustomApiKey;
             string licenseKey = LicenseKey;
+            string openAIApiKey = OpenAIApiKey;
+            string geminiApiKey = GeminiApiKey;
 
             // デフォルト設定を適用
             var defaultSettings = new AppSettings();
@@ -228,7 +240,8 @@ namespace GameTranslationOverlay.Core.Configuration
             foreach (var property in typeof(AppSettings).GetProperties())
             {
                 // カスタムAPIキーとライセンスキー以外をコピー
-                if (property.Name != nameof(CustomApiKey) && property.Name != nameof(LicenseKey))
+                if (property.Name != nameof(CustomApiKey) && property.Name != nameof(LicenseKey) && 
+                    property.Name != nameof(OpenAIApiKey) && property.Name != nameof(GeminiApiKey))
                 {
                     property.SetValue(this, property.GetValue(defaultSettings));
                 }
@@ -237,10 +250,12 @@ namespace GameTranslationOverlay.Core.Configuration
             // 保持していた値を復元
             CustomApiKey = customApiKey;
             LicenseKey = licenseKey;
+            OpenAIApiKey = openAIApiKey;
+            GeminiApiKey = geminiApiKey;
 
             // 設定を保存
             SaveSettings();
-            Debug.WriteLine("Settings reset to defaults (keeping CustomApiKey and LicenseKey)");
+            Debug.WriteLine("Settings reset to defaults (keeping API keys and license keys)");
         }
     }
 }
