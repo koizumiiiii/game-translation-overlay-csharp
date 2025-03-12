@@ -64,6 +64,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Core\Configuration\AppSettings.cs" />
+    <Compile Include="Core\Configuration\GameProfiles.cs" />
     <Compile Include="Core\Diagnostics\DiagnosticsCollector.cs" />
     <Compile Include="Core\Diagnostics\ErrorReporter.cs" />
     <Compile Include="Core\Diagnostics\Logger.cs" />
