@@ -125,6 +125,21 @@
     <Compile Include="Forms\OverlayForm.Designer.cs">
       <DependentUpon>OverlayForm.cs</DependentUpon>
     </Compile>
+    <Compile Include="Forms\Settings\GeneralSettingsControl.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="Forms\Settings\OcrSettingsControl.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="Forms\Settings\ProfileSettingsControl.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="Forms\Settings\SettingsForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\Settings\TranslationSettingsControl.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
     <Compile Include="Forms\TranslationBox.cs">
       <SubType>Form</SubType>
     </Compile>
