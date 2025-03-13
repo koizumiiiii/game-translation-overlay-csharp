@@ -52,21 +52,6 @@ namespace GameTranslationOverlay.Core.Configuration
         /// </summary>
         public string LicenseKey { get; set; } = string.Empty;
 
-        /// <summary>
-        /// カスタムAPIキー (ユーザーが設定したOpenAI APIキー)
-        /// </summary>
-        public string CustomApiKey { get; set; } = string.Empty;
-
-        /// <summary>
-        /// OpenAI APIキー
-        /// </summary>
-        public string OpenAIApiKey { get; set; } = string.Empty;
-
-        /// <summary>
-        /// Google Gemini APIキー
-        /// </summary>
-        public string GeminiApiKey { get; set; } = string.Empty;
-
         #endregion
 
         #region OCR設定
@@ -227,11 +212,8 @@ namespace GameTranslationOverlay.Core.Configuration
         /// </summary>
         public void ResetToDefaults()
         {
-            // カスタムAPIキーとライセンスキーを保持
-            string customApiKey = CustomApiKey;
+            // ライセンスキーのみ保持
             string licenseKey = LicenseKey;
-            string openAIApiKey = OpenAIApiKey;
-            string geminiApiKey = GeminiApiKey;
 
             // デフォルト設定を適用
             var defaultSettings = new AppSettings();
@@ -239,23 +221,19 @@ namespace GameTranslationOverlay.Core.Configuration
             // プロパティをコピー
             foreach (var property in typeof(AppSettings).GetProperties())
             {
-                // カスタムAPIキーとライセンスキー以外をコピー
-                if (property.Name != nameof(CustomApiKey) && property.Name != nameof(LicenseKey) && 
-                    property.Name != nameof(OpenAIApiKey) && property.Name != nameof(GeminiApiKey))
+                // ライセンスキー以外をコピー
+                if (property.Name != nameof(LicenseKey))
                 {
                     property.SetValue(this, property.GetValue(defaultSettings));
                 }
             }
 
             // 保持していた値を復元
-            CustomApiKey = customApiKey;
             LicenseKey = licenseKey;
-            OpenAIApiKey = openAIApiKey;
-            GeminiApiKey = geminiApiKey;
 
             // 設定を保存
             SaveSettings();
-            Debug.WriteLine("Settings reset to defaults (keeping API keys and license keys)");
+            Debug.WriteLine("Settings reset to defaults (keeping license key)");
         }
     }
 }

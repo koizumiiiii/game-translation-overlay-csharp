@@ -15,6 +15,7 @@ using GameTranslationOverlay.Core.OCR;
 using GameTranslationOverlay.Core.Security;
 using GameTranslationOverlay.Core.Diagnostics;
 using GameTranslationOverlay.Core.Configuration;
+using GameTranslationOverlay.Properties;
 
 namespace GameTranslationOverlay.Core.OCR.AI
 {
@@ -103,12 +104,57 @@ namespace GameTranslationOverlay.Core.OCR.AI
         /// </summary>
         private string GetOpenAIApiKey()
         {
-            // 実際のプロジェクトでのAPIキー取得方法に合わせて実装
-            // 例: AppSettings.Instance.OpenAIApiKey を使用
-            // または ApiKeyProtector.Instance.GetKey("OpenAI") など
+            // VisionServiceClient.cs - GetOpenAIApiKey メソッド
+            try
+            {
+                // ApiMultiKeyProtectorを使用してAPIキーを取得
+                string apiKey = _keyProtector.GetApiKey(ApiMultiKeyProtector.ApiProvider.OpenAI);
 
-            // 仮実装
-            return AppSettings.Instance.OpenAIApiKey;
+                // 通常のOpenAIキーが取得できた場合はそれを返す
+                if (!string.IsNullOrEmpty(apiKey))
+                {
+                    return apiKey;
+                }
+
+                // エラーログ
+                Debug.WriteLine("OpenAI APIキーの取得に失敗しました");
+                return string.Empty;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"OpenAI APIキーの取得中にエラー: {ex.Message}");
+                return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// Vision APIキーを取得します
+        /// </summary>
+        private string GetVisionApiKey()
+        {
+            try
+            {
+                // Vision用のOpenAIキーを検索
+                var keyInfoList = _keyProtector.GetKeyInfoList(ApiMultiKeyProtector.ApiProvider.OpenAI);
+                if (keyInfoList.Any(k => (string)k["KeyId"] == "vision" && (bool)k["IsActive"]))
+                {
+                    // "vision"キーIDのキーを復号化
+                    byte[] encryptedBytes = Convert.FromBase64String(Resources.EncryptedVisionApiKey);
+                    byte[] decryptedBytes = System.Security.Cryptography.ProtectedData.Unprotect(
+                        encryptedBytes,
+                        null,
+                        System.Security.Cryptography.DataProtectionScope.CurrentUser);
+                    return Encoding.UTF8.GetString(decryptedBytes);
+                }
+
+                // Vision特定のキーがなければ通常のOpenAIキーを返す
+                return GetOpenAIApiKey();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Vision APIキーの取得中にエラー: {ex.Message}");
+                return string.Empty;
+            }
         }
 
         /// <summary>
@@ -116,11 +162,26 @@ namespace GameTranslationOverlay.Core.OCR.AI
         /// </summary>
         private string GetGeminiApiKey()
         {
-            // 実際のプロジェクトでのAPIキー取得方法に合わせて実装
-            // 例: AppSettings.Instance.GeminiApiKey を使用
+            try
+            {
+                // ApiMultiKeyProtectorを使用してAPIキーを取得
+                string apiKey = _keyProtector.GetApiKey(ApiMultiKeyProtector.ApiProvider.GoogleGemini);
 
-            // 仮実装
-            return AppSettings.Instance.GeminiApiKey;
+                // キーが取得できた場合はそれを返す
+                if (!string.IsNullOrEmpty(apiKey))
+                {
+                    return apiKey;
+                }
+
+                // エラーログ
+                Debug.WriteLine("Gemini APIキーの取得に失敗しました");
+                return string.Empty;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Gemini APIキーの取得中にエラー: {ex.Message}");
+                return string.Empty;
+            }
         }
 
         /// <summary>

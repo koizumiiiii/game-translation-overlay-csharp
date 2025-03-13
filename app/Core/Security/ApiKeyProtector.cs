@@ -36,7 +36,7 @@ namespace GameTranslationOverlay.Core.Security
             try
             {
                 // リソースファイルから暗号化されたAPIキーを取得
-                string encryptedKey = Resources.EncryptedApiKey;
+                string encryptedKey = Resources.EncryptedOpenAIApiKey;
 
                 if (string.IsNullOrEmpty(encryptedKey))
                 {

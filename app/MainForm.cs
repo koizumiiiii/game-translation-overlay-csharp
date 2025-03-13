@@ -465,8 +465,18 @@ namespace GameTranslationOverlay
 
             settingsMenuItem.Click += (s, e) =>
             {
-                // TODO: 設定画面の実装
-                MessageBox.Show("設定機能は近日実装予定です。", "Information", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                using (var settingsForm = new Forms.Settings.SettingsForm())
+                {
+                    // 設定変更イベントを処理
+                    settingsForm.SettingsChanged += (sender, args) =>
+                    {
+                        // 設定が変更された場合の処理
+                        // 例: OCR設定を更新、翻訳設定を更新など
+                        UpdateSettingsFromConfig();
+                    };
+
+                    settingsForm.ShowDialog(this);
+                }
             };
 
             toolsMenu.DropDownItems.Add(ocrTestMenuItem);
@@ -741,6 +751,32 @@ namespace GameTranslationOverlay
             }
         }
 
+        private void UpdateSettingsFromConfig()
+        {
+            // OCR設定の更新
+            if (_ocrManager != null)
+            {
+                _ocrManager.SetConfidenceThreshold(AppSettings.Instance.OcrConfidenceThreshold);
+                _ocrManager.EnablePreprocessing(AppSettings.Instance.EnablePreprocessing);
+                _confidenceTrackBar.Value = (int)(AppSettings.Instance.OcrConfidenceThreshold * 100);
+                _confidenceLabel.Text = AppSettings.Instance.OcrConfidenceThreshold.ToString("F2");
+                _usePreprocessingCheckBox.Checked = AppSettings.Instance.EnablePreprocessing;
+            }
+
+            // 翻訳設定の更新
+            if (_translationManager != null)
+            {
+                _translationManager.SetPreferredTargetLanguage(AppSettings.Instance.TargetLanguage);
+                _useAutoDetectCheckBox.Checked = AppSettings.Instance.UseAutoDetect;
+                _targetLanguageComboBox.SelectedIndex = Array.IndexOf(
+                    LanguageManager.SupportedLanguages,
+                    AppSettings.Instance.TargetLanguage
+                );
+            }
+
+            // 状態表示の更新
+            UpdateStatus("設定を更新しました");
+        }
 
         /// <summary>
         /// OCR設定UIを現在の状態に更新

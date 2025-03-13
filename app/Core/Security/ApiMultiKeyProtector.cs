@@ -434,8 +434,8 @@ namespace GameTranslationOverlay.Core.Security
         {
             try
             {
-                // リソースからデフォルトのOpenAI APIキーを取得
-                string openAiKey = Resources.EncryptedApiKey;
+                // リソースからOpenAI APIキーを取得
+                string openAiKey = Resources.EncryptedOpenAIApiKey;
                 if (!string.IsNullOrEmpty(openAiKey))
                 {
                     if (!_apiKeys.ContainsKey(ApiProvider.OpenAI))
@@ -459,8 +459,55 @@ namespace GameTranslationOverlay.Core.Security
                     }
                 }
 
-                // 必要に応じて他のデフォルトキーも初期化
-                // 例: GoogleGemini のデフォルトキーも同様に初期化
+                // Visionキーの追加
+                string visionKey = Resources.EncryptedVisionApiKey;
+                if (!string.IsNullOrEmpty(visionKey))
+                {
+                    if (!_apiKeys.ContainsKey(ApiProvider.OpenAI))
+                    {
+                        _apiKeys[ApiProvider.OpenAI] = new List<ApiKeyInfo>();
+                    }
+
+                    // Visionキーがまだ追加されていないか確認
+                    if (!_apiKeys[ApiProvider.OpenAI].Any(k => k.KeyId == "vision"))
+                    {
+                        _apiKeys[ApiProvider.OpenAI].Add(new ApiKeyInfo
+                        {
+                            EncryptedKey = visionKey,
+                            Created = DateTime.Now,
+                            Expiration = null,
+                            IsActive = true,
+                            KeyId = "vision"
+                        });
+
+                        Logger.Instance.LogInfo("Initialized OpenAI Vision API key");
+                    }
+                }
+
+                // Geminiキーの追加
+                string geminiKey = Resources.EncryptedGeminiApiKey;
+                if (!string.IsNullOrEmpty(geminiKey))
+                {
+                    if (!_apiKeys.ContainsKey(ApiProvider.GoogleGemini))
+                    {
+                        _apiKeys[ApiProvider.GoogleGemini] = new List<ApiKeyInfo>();
+                    }
+
+                    // Geminiキーがまだ追加されていないか確認
+                    if (!_apiKeys[ApiProvider.GoogleGemini].Any(k => k.KeyId == "default"))
+                    {
+                        _apiKeys[ApiProvider.GoogleGemini].Add(new ApiKeyInfo
+                        {
+                            EncryptedKey = geminiKey,
+                            Created = DateTime.Now,
+                            Expiration = null,
+                            IsActive = true,
+                            KeyId = "default"
+                        });
+
+                        Logger.Instance.LogInfo("Initialized default Gemini API key");
+                    }
+                }
             }
             catch (Exception ex)
             {
