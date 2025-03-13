@@ -59,7 +59,6 @@ namespace GameTranslationOverlay
         private TranslationManager _translationManager;
         private LibreTranslateEngine _libreTranslateEngine;
         private AITranslationEngine _aiTranslationEngine;
-        private string _openAiApiKey = ""; // 実際のAPIキーは環境変数や設定ファイルから読み込むべき
 
         private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
         private const uint SWP_NOMOVE = 0x0002;

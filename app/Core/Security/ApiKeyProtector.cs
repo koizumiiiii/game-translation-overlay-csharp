@@ -1,5 +1,4 @@
-﻿// GameTranslationOverlay/Core/Security/ApiKeyProtector.cs
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;

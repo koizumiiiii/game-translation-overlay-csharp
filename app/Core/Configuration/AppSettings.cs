@@ -1,5 +1,4 @@
-﻿// GameTranslationOverlay/Core/Configuration/AppSettings.cs
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -57,9 +56,19 @@ namespace GameTranslationOverlay.Core.Configuration
         #region OCR設定
 
         /// <summary>
+        /// OCR信頼度閾値
+        /// </summary>
+        public float OcrConfidenceThreshold { get; set; } = 0.6f;
+
+        /// <summary>
         /// デフォルトのOCR信頼度閾値
         /// </summary>
         public float DefaultOcrThreshold { get; set; } = 0.6f;
+
+        /// <summary>
+        /// OCR前処理の有効/無効
+        /// </summary>
+        public bool EnablePreprocessing { get; set; } = true;
 
         /// <summary>
         /// OCR前処理の有効/無効
@@ -94,6 +103,11 @@ namespace GameTranslationOverlay.Core.Configuration
         /// 翻訳結果のキャッシュサイズ
         /// </summary>
         public int TranslationCacheSize { get; set; } = 1000;
+
+        /// <summary>
+        /// カスタムAPIキー
+        /// </summary>
+        public string CustomApiKey { get; set; } = string.Empty;
 
         #endregion
 
