@@ -19,6 +19,9 @@ using GameTranslationOverlay.Core.Models;
 using GameTranslationOverlay.Core.Translation.Services;
 using GameTranslationOverlay.Core.Translation.Interfaces;
 using GameTranslationOverlay.Core.Licensing;
+using GameTranslationOverlay.Core.OCR.AI;
+using GameTranslationOverlay.Core.Configuration;
+
 namespace GameTranslationOverlay
 {
     public partial class MainForm : Form
@@ -61,6 +64,10 @@ namespace GameTranslationOverlay
         private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
         private const uint SWP_NOMOVE = 0x0002;
         private const uint SWP_NOSIZE = 0x0001;
+
+        private Button _optimizeOcrButton;
+        private OcrOptimizer _ocrOptimizer;
+        private GameProfiles _gameProfiles;
 
         public MainForm()
         {
@@ -120,6 +127,9 @@ namespace GameTranslationOverlay
             _benchmarkButton.Click += async (sender, e) => await RunBenchmark();
             this.Controls.Add(_benchmarkButton);
 
+            // 最適化コントロールを初期化（この行を追加）
+            InitializeOptimizationControls();
+
             // OCR設定グループを初期化
             InitializeOcrSettings();
 
@@ -142,8 +152,14 @@ namespace GameTranslationOverlay
 
             // フォームのサイズを調整
             this.ClientSize = new Size(
-                Math.Max(_ocrSettingsGroup.Right + 12, _translationSettingsGroup.Right + 12),
-                Math.Max(_benchmarkButton.Bottom + 12, _translationSettingsGroup.Bottom + 12)
+                Math.Max(
+                    Math.Max(_ocrSettingsGroup.Right + 12, _translationSettingsGroup.Right + 12),
+                    _optimizeOcrButton.Right + 12
+                ),
+                Math.Max(
+                    Math.Max(_benchmarkButton.Bottom + 12, _translationSettingsGroup.Bottom + 12),
+                    _optimizeOcrButton.Bottom + 12
+                )
             );
 
             // 常に最前面に表示
@@ -333,6 +349,103 @@ namespace GameTranslationOverlay
             this.Name = "MainForm";
             this.Text = "Game Translation Overlay";
             this.ResumeLayout(false);
+        }
+
+        private void InitializeOptimizationControls()
+        {
+            // OCR最適化ボタン
+            _optimizeOcrButton = new Button
+            {
+                Text = "現在のゲームのOCR設定を最適化",
+                Location = new Point(12, _benchmarkButton.Bottom + 12),
+                Size = new Size(180, 30)
+            };
+            _optimizeOcrButton.Click += OptimizeOcrButton_Click;
+            this.Controls.Add(_optimizeOcrButton);
+
+            // ゲームプロファイル管理の初期化
+            _gameProfiles = new GameProfiles();
+
+            // サービス初期化時にOptimzerを初期化
+            // この部分はInitializeServicesメソッド内で実行
+        }
+
+        private async void OptimizeOcrButton_Click(object sender, EventArgs e)
+        {
+            string gameTitle = _selectedWindow?.Title;
+
+            if (string.IsNullOrEmpty(gameTitle))
+            {
+                MessageBox.Show("まず翻訳対象のウィンドウを選択してください。");
+                return;
+            }
+
+            // テキスト表示のガイダンス
+            DialogResult result = MessageBox.Show(
+                "OCR設定の最適化を行います。\n\n" +
+                "会話シーン、メニュー画面、説明画面など、\n" +
+                "テキストが多く表示されている画面で実行してください。\n\n" +
+                "準備ができたら「OK」を押してください。",
+                "OCR最適化ガイド",
+                MessageBoxButtons.OKCancel,
+                MessageBoxIcon.Information
+            );
+
+            if (result != DialogResult.OK)
+                return;
+
+            // 現在のゲーム画面をキャプチャ
+            using (Bitmap screenshot = ScreenCapture.CaptureWindow(_selectedWindow.Handle))
+            {
+                _optimizeOcrButton.Text = "最適化中...";
+                _optimizeOcrButton.Enabled = false;
+
+                try
+                {
+                    // ステータス更新
+                    UpdateStatus("OCR設定の最適化中...");
+
+                    // 初回実行時にOCROptimizerを初期化
+                    if (_ocrOptimizer == null)
+                    {
+                        _ocrOptimizer = new OcrOptimizer(_ocrManager);
+                    }
+
+                    // 最適化を実行
+                    var optimalSettings = await _ocrOptimizer.OptimizeForGame(gameTitle, screenshot);
+
+                    // ゲームプロファイルに保存
+                    _gameProfiles.SaveProfile(gameTitle, optimalSettings);
+
+                    MessageBox.Show($"{gameTitle} のOCR設定を最適化しました。", "最適化完了", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    UpdateStatus($"{gameTitle} のOCR設定を最適化しました");
+                }
+                catch (Exception ex)
+                {
+                    if (ex.Message.Contains("テキストが十分に表示されていません"))
+                    {
+                        MessageBox.Show(
+                            "テキストが十分に表示されていない画面です。\n\n" +
+                            "会話シーン、メニュー画面、説明画面など、\n" +
+                            "より多くのテキストが表示されている画面で再試行してください。",
+                            "テキスト不足",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning
+                        );
+                    }
+                    else
+                    {
+                        MessageBox.Show($"最適化中にエラーが発生しました: {ex.Message}", "エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+
+                    UpdateStatus("OCR最適化エラー", true);
+                }
+                finally
+                {
+                    _optimizeOcrButton.Text = "現在のゲームのOCR設定を最適化";
+                    _optimizeOcrButton.Enabled = true;
+                }
+            }
         }
 
         private void InitializeMenu()
@@ -595,6 +708,13 @@ namespace GameTranslationOverlay
                 // OCR設定UIの初期状態を設定
                 UpdateOcrSettings();
 
+                // オプティマイザーの初期化
+                if (_ocrManager != null)
+                {
+                    _ocrOptimizer = new OcrOptimizer(_ocrManager);
+                    Debug.WriteLine("InitializeServices: OCRオプティマイザー初期化完了");
+                }
+
                 // 翻訳サービスの初期化
                 InitializeTranslationServices();
                 Debug.WriteLine("InitializeServices: 翻訳サービス初期化開始");
@@ -676,6 +796,45 @@ namespace GameTranslationOverlay
                         }
                     }
                 }
+            }
+            // プロファイルの適用を追加
+            if (_selectedWindow != null)
+            {
+                // 選択したゲームのプロファイルを適用
+                ApplyGameProfile(_selectedWindow.Title);
+            }
+        }
+
+        // プロファイル適用処理
+        private void ApplyGameProfile(string gameTitle)
+        {
+            try
+            {
+                // プロファイルが存在するか確認
+                if (_gameProfiles != null && _gameProfiles.HasProfile(gameTitle))
+                {
+                    // プロファイルを適用
+                    var profile = _gameProfiles.GetProfile(gameTitle);
+
+                    if (_ocrManager != null)
+                    {
+                        // OCR設定を適用
+                        _ocrManager.SetConfidenceThreshold(profile.ConfidenceThreshold);
+                        _ocrManager.SetPreprocessingOptions(profile.PreprocessingOptions);
+                        _ocrManager.EnablePreprocessing(true);
+
+                        // UI更新
+                        _confidenceTrackBar.Value = (int)(profile.ConfidenceThreshold * 100);
+                        _confidenceLabel.Text = profile.ConfidenceThreshold.ToString("F2");
+                        _usePreprocessingCheckBox.Checked = true;
+
+                        UpdateStatus($"{gameTitle} の最適化プロファイルを適用しました");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"プロファイル適用エラー: {ex.Message}");
             }
         }
 
