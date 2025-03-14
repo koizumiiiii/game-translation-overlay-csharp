@@ -166,7 +166,7 @@ namespace GameTranslationOverlay.Forms.Settings
             {
                 // ダミーデータを作成 (実際の実装ではファイルやデータベースから読み込む)
                 _profiles = CreateDummyProfiles();
-                
+
                 // リストビューを更新
                 UpdateProfileListView();
             }
@@ -185,7 +185,7 @@ namespace GameTranslationOverlay.Forms.Settings
             {
                 // プロファイル設定を保存 (実際の実装ではファイルやデータベースに保存)
                 Debug.WriteLine($"{_profiles.Count}個のプロファイルを保存します");
-                
+
                 // 将来的には、Core.Configuration内にGameProfilesクラスを作成し、
                 // そこでJSONシリアライズして保存する実装を行う
             }
@@ -202,7 +202,7 @@ namespace GameTranslationOverlay.Forms.Settings
         private void UpdateProfileListView()
         {
             _profileListView.Items.Clear();
-            
+
             foreach (var profile in _profiles)
             {
                 var item = new ListViewItem(profile.GameName);
@@ -210,10 +210,10 @@ namespace GameTranslationOverlay.Forms.Settings
                 item.SubItems.Add(profile.ConfidenceThreshold.ToString("F2"));
                 item.SubItems.Add(profile.LastModified.ToString("yyyy/MM/dd"));
                 item.Tag = profile;
-                
+
                 _profileListView.Items.Add(item);
             }
-            
+
             UpdateButtonStates();
         }
 
@@ -245,16 +245,16 @@ namespace GameTranslationOverlay.Forms.Settings
                     PreprocessingPreset = 0,
                     LastModified = DateTime.Now
                 };
-                
+
                 // プロファイル編集ダイアログを表示
                 if (EditProfile(profile))
                 {
                     // プロファイルを追加
                     _profiles.Add(profile);
-                    
+
                     // リストビューを更新
                     UpdateProfileListView();
-                    
+
                     // 設定変更イベントを発火
                     OnSettingChanged();
                 }
@@ -280,23 +280,23 @@ namespace GameTranslationOverlay.Forms.Settings
             {
                 if (_profileListView.SelectedItems.Count == 0)
                     return;
-                
+
                 // 選択したプロファイルを取得
                 var selectedItem = _profileListView.SelectedItems[0];
                 var profile = selectedItem.Tag as GameProfile;
-                
+
                 if (profile == null)
                     return;
-                
+
                 // プロファイル編集ダイアログを表示
                 if (EditProfile(profile))
                 {
                     // 最終更新日時を更新
                     profile.LastModified = DateTime.Now;
-                    
+
                     // リストビューを更新
                     UpdateProfileListView();
-                    
+
                     // 設定変更イベントを発火
                     OnSettingChanged();
                 }
@@ -322,7 +322,7 @@ namespace GameTranslationOverlay.Forms.Settings
             {
                 if (_profileListView.SelectedItems.Count == 0)
                     return;
-                
+
                 // 確認ダイアログを表示
                 var result = MessageBox.Show(
                     "選択したプロファイルを削除しますか？",
@@ -330,23 +330,23 @@ namespace GameTranslationOverlay.Forms.Settings
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question
                 );
-                
+
                 if (result != DialogResult.Yes)
                     return;
-                
+
                 // 選択したプロファイルを取得
                 var selectedItem = _profileListView.SelectedItems[0];
                 var profile = selectedItem.Tag as GameProfile;
-                
+
                 if (profile == null)
                     return;
-                
+
                 // プロファイルを削除
                 _profiles.Remove(profile);
-                
+
                 // リストビューを更新
                 UpdateProfileListView();
-                
+
                 // 設定変更イベントを発火
                 OnSettingChanged();
             }
@@ -374,22 +374,22 @@ namespace GameTranslationOverlay.Forms.Settings
                 {
                     dialog.Filter = "JSONファイル (*.json)|*.json|すべてのファイル (*.*)|*.*";
                     dialog.Title = "プロファイルをインポート";
-                    
+
                     if (dialog.ShowDialog() == DialogResult.OK)
                     {
                         // ファイルからプロファイルを読み込む
                         // 実際の実装ではJSONデシリアライズを行う
-                        
+
                         MessageBox.Show(
                             "プロファイルがインポートされました。",
                             "成功",
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Information
                         );
-                        
+
                         // リストビューを更新
                         UpdateProfileListView();
-                        
+
                         // 設定変更イベントを発火
                         OnSettingChanged();
                     }
@@ -416,26 +416,26 @@ namespace GameTranslationOverlay.Forms.Settings
             {
                 if (_profileListView.SelectedItems.Count == 0)
                     return;
-                
+
                 // 選択したプロファイルを取得
                 var selectedItem = _profileListView.SelectedItems[0];
                 var profile = selectedItem.Tag as GameProfile;
-                
+
                 if (profile == null)
                     return;
-                
+
                 // ファイル保存ダイアログを表示
                 using (var dialog = new SaveFileDialog())
                 {
                     dialog.Filter = "JSONファイル (*.json)|*.json|すべてのファイル (*.*)|*.*";
                     dialog.Title = "プロファイルをエクスポート";
                     dialog.FileName = $"{profile.GameName}.json";
-                    
+
                     if (dialog.ShowDialog() == DialogResult.OK)
                     {
                         // プロファイルをファイルに保存
                         // 実際の実装ではJSONシリアライズを行う
-                        
+
                         MessageBox.Show(
                             "プロファイルがエクスポートされました。",
                             "成功",
@@ -471,36 +471,36 @@ namespace GameTranslationOverlay.Forms.Settings
                 form.MaximizeBox = false;
                 form.MinimizeBox = false;
                 form.StartPosition = FormStartPosition.CenterParent;
-                
+
                 // ゲーム名
                 var gameNameLabel = new Label { Text = "ゲーム名:", Location = new Point(20, 20), AutoSize = true };
                 var gameNameTextBox = new TextBox { Text = profile.GameName, Location = new Point(120, 17), Size = new Size(200, 20) };
-                
+
                 // 実行ファイル名
                 var exeNameLabel = new Label { Text = "実行ファイル:", Location = new Point(20, 50), AutoSize = true };
                 var exeNameTextBox = new TextBox { Text = profile.ExecutableName, Location = new Point(120, 47), Size = new Size(200, 20) };
-                
+
                 // 信頼度閾値
                 var thresholdLabel = new Label { Text = "信頼度閾値:", Location = new Point(20, 80), AutoSize = true };
                 var thresholdTrackBar = new TrackBar { Location = new Point(120, 70), Size = new Size(200, 45), Minimum = 1, Maximum = 100, Value = (int)(profile.ConfidenceThreshold * 100) };
                 var thresholdValueLabel = new Label { Text = profile.ConfidenceThreshold.ToString("F2"), Location = new Point(330, 80), AutoSize = true };
                 thresholdTrackBar.ValueChanged += (s, e) => thresholdValueLabel.Text = (thresholdTrackBar.Value / 100.0f).ToString("F2");
-                
+
                 // 前処理の有効/無効
                 var preprocessingCheckBox = new CheckBox { Text = "前処理を有効にする", Location = new Point(20, 120), AutoSize = true, Checked = profile.EnablePreprocessing };
-                
+
                 // プリセット選択
                 var presetLabel = new Label { Text = "前処理プリセット:", Location = new Point(20, 150), AutoSize = true };
                 var presetComboBox = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(120, 147), Size = new Size(200, 21) };
                 presetComboBox.Items.AddRange(new object[] { "デフォルト", "日本語テキスト用", "英語テキスト用", "軽量プリセット" });
                 presetComboBox.SelectedIndex = profile.PreprocessingPreset;
-                
+
                 // OKボタン
                 var okButton = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(120, 180), Size = new Size(80, 30) };
-                
+
                 // キャンセルボタン
                 var cancelButton = new Button { Text = "キャンセル", DialogResult = DialogResult.Cancel, Location = new Point(210, 180), Size = new Size(80, 30) };
-                
+
                 // コントロールをフォームに追加
                 form.Controls.Add(gameNameLabel);
                 form.Controls.Add(gameNameTextBox);
@@ -514,10 +514,10 @@ namespace GameTranslationOverlay.Forms.Settings
                 form.Controls.Add(presetComboBox);
                 form.Controls.Add(okButton);
                 form.Controls.Add(cancelButton);
-                
+
                 // フォームを表示
                 var result = form.ShowDialog();
-                
+
                 if (result == DialogResult.OK)
                 {
                     // 入力値を反映
@@ -526,10 +526,10 @@ namespace GameTranslationOverlay.Forms.Settings
                     profile.ConfidenceThreshold = thresholdTrackBar.Value / 100.0f;
                     profile.EnablePreprocessing = preprocessingCheckBox.Checked;
                     profile.PreprocessingPreset = presetComboBox.SelectedIndex;
-                    
+
                     return true;
                 }
-                
+
                 return false;
             }
         }
@@ -540,7 +540,7 @@ namespace GameTranslationOverlay.Forms.Settings
         private List<GameProfile> CreateDummyProfiles()
         {
             var profiles = new List<GameProfile>();
-            
+
             // ダミーデータの作成
             profiles.Add(new GameProfile
             {
@@ -551,7 +551,7 @@ namespace GameTranslationOverlay.Forms.Settings
                 PreprocessingPreset = 1,
                 LastModified = DateTime.Now.AddDays(-5)
             });
-            
+
             profiles.Add(new GameProfile
             {
                 GameName = "サンプルゲーム2",
@@ -561,7 +561,7 @@ namespace GameTranslationOverlay.Forms.Settings
                 PreprocessingPreset = 2,
                 LastModified = DateTime.Now.AddDays(-2)
             });
-            
+
             profiles.Add(new GameProfile
             {
                 GameName = "サンプルゲーム3",
@@ -571,7 +571,7 @@ namespace GameTranslationOverlay.Forms.Settings
                 PreprocessingPreset = 0,
                 LastModified = DateTime.Now.AddDays(-1)
             });
-            
+
             return profiles;
         }
 

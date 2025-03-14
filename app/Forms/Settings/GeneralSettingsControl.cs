@@ -126,7 +126,7 @@ namespace GameTranslationOverlay.Forms.Settings
                 var settings = AppSettings.Instance;
                 _debugModeCheckBox.Checked = settings.DebugModeEnabled;
                 _licenseKeyTextBox.Text = settings.LicenseKey;
-                
+
                 UpdateLicenseStatus();
             }
             catch (Exception ex)
@@ -194,7 +194,7 @@ namespace GameTranslationOverlay.Forms.Settings
 
                 // ライセンスマネージャーを再初期化
                 bool result = LicenseManager.Instance.ValidateLicense(_licenseKeyTextBox.Text);
-                
+
                 // 結果に応じてメッセージを表示
                 if (result)
                 {
@@ -214,7 +214,7 @@ namespace GameTranslationOverlay.Forms.Settings
                         MessageBoxIcon.Error
                     );
                 }
-                
+
                 // ライセンス状態を更新
                 UpdateLicenseStatus();
             }
@@ -241,24 +241,24 @@ namespace GameTranslationOverlay.Forms.Settings
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question
             );
-            
+
             if (result == DialogResult.Yes)
             {
                 try
                 {
                     // 設定をリセット
                     AppSettings.Instance.ResetToDefaults();
-                    
+
                     // 設定を読み込み直す
                     LoadSettings();
-                    
+
                     MessageBox.Show(
                         "設定がリセットされました。",
                         "成功",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Information
                     );
-                    
+
                     // 設定変更イベントを発火
                     OnSettingChanged();
                 }

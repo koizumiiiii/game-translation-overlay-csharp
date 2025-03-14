@@ -49,7 +49,7 @@ namespace GameTranslationOverlay.Forms.Settings
                 AutoSize = true,
                 Checked = true
             };
-            _enablePreprocessingCheckBox.CheckedChanged += (s, e) => 
+            _enablePreprocessingCheckBox.CheckedChanged += (s, e) =>
             {
                 _preprocessingGroupBox.Enabled = _enablePreprocessingCheckBox.Checked;
                 OnSettingChanged();
@@ -166,16 +166,16 @@ namespace GameTranslationOverlay.Forms.Settings
             try
             {
                 var settings = AppSettings.Instance;
-                
+
                 // 設定を反映
                 _enablePreprocessingCheckBox.Checked = settings.EnableOcrPreprocessing;
                 _confidenceThresholdTrackBar.Value = (int)(settings.DefaultOcrThreshold * 100);
                 _confidenceValueLabel.Text = settings.DefaultOcrThreshold.ToString("F2");
-                
+
                 // プリセット設定を反映
                 // 注: AppSettingsにはまだプリセット設定がないため、デフォルトまたは将来的な拡張での実装を想定
                 _preprocessingGroupBox.Enabled = settings.EnableOcrPreprocessing;
-                
+
                 // 現在はデフォルトを選択
                 _defaultPresetRadioButton.Checked = true;
             }
@@ -193,11 +193,11 @@ namespace GameTranslationOverlay.Forms.Settings
             try
             {
                 var settings = AppSettings.Instance;
-                
+
                 // 設定を保存
                 settings.EnableOcrPreprocessing = _enablePreprocessingCheckBox.Checked;
                 settings.DefaultOcrThreshold = _confidenceThresholdTrackBar.Value / 100.0f;
-                
+
                 // プリセット設定の保存
                 // 注: AppSettingsにはまだプリセット設定がないため、将来的な拡張での実装を想定
                 // 現在は何もしない
