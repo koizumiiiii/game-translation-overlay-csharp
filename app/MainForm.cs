@@ -149,6 +149,9 @@ namespace GameTranslationOverlay
             // サービスの初期化
             InitializeServices();
 
+            // フォント管理の初期化と適用
+            InitializeFontManagement();
+
             // フォームのサイズを調整
             this.ClientSize = new Size(
                 Math.Max(
@@ -165,6 +168,50 @@ namespace GameTranslationOverlay
             SetWindowPos(this.Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 
             Debug.WriteLine("MainForm: コンストラクタ完了");
+        }
+
+        /// <summary>
+        /// フォント管理の初期化と適用
+        /// </summary>
+        private void InitializeFontManagement()
+        {
+            try
+            {
+                // このフォームにデフォルトフォントを適用
+                FontManager.Instance.ApplyFontToForm(this);
+
+                // 特定のコントロールに適切なフォントを適用
+                if (_statusLabel != null)
+                {
+                    FontManager.Instance.ApplyFont(_statusLabel, FontSize.Default);
+                }
+
+                // タイトルフォントをメニュー項目に適用
+                if (_menuStrip != null)
+                {
+                    FontManager.Instance.ApplyFont(_menuStrip, FontSize.Title);
+                }
+
+                // グループボックスのタイトルフォント
+                if (_ocrSettingsGroup != null)
+                {
+                    FontManager.Instance.ApplyFont(_ocrSettingsGroup, FontSize.Title);
+                }
+
+                if (_translationSettingsGroup != null)
+                {
+                    FontManager.Instance.ApplyFont(_translationSettingsGroup, FontSize.Title);
+                }
+
+                // フォント情報をログに出力
+                Debug.WriteLine("フォント管理を初期化しました");
+                Debug.WriteLine($"日本語フォント利用可能: {FontManager.Instance.IsJpFontAvailable}");
+                Debug.WriteLine($"英語フォント利用可能: {FontManager.Instance.IsEnFontAvailable}");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"フォント管理の初期化中にエラーが発生しました: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -523,6 +570,9 @@ namespace GameTranslationOverlay
                     if (_overlayForm != null && _overlayForm.TranslationBox != null && !_overlayForm.TranslationBox.IsDisposed)
                     {
                         _overlayForm.TranslationBox.SetTargetLanguage(selectedLangCode);
+
+                        // 言語に応じたフォントも適用
+                        UpdateTranslationBoxFont(selectedLangCode);
                     }
                 }
             }
@@ -577,7 +627,24 @@ namespace GameTranslationOverlay
                             await _translationManager.InitializeAsync();
                             this.BeginInvoke(new Action(() =>
                             {
-                                UpdateStatus("AI翻訳エンジン初期化完了");
+                                UpdateStatus("翻訳エンジン初期化完了");
+
+                                // ライセンスに基づいてAI翻訳チェックボックスの状態を設定
+                                UpdateAITranslationCheckboxState();
+
+                                // OverlayFormのTranslationBoxに適切なフォントを設定（もし表示されていれば）
+                                if (_overlayForm != null && _overlayForm.TranslationBox != null && !_overlayForm.TranslationBox.IsDisposed)
+                                {
+                                    string selectedLang = GetSelectedTargetLanguage();
+                                    if (selectedLang == "ja")
+                                    {
+                                        FontManager.Instance.ApplyTranslationFont(_overlayForm.TranslationBox, TranslationLanguage.Japanese);
+                                    }
+                                    else
+                                    {
+                                        FontManager.Instance.ApplyTranslationFont(_overlayForm.TranslationBox, TranslationLanguage.English);
+                                    }
+                                }
                             }));
                         }
                         catch (Exception ex)
@@ -805,6 +872,44 @@ namespace GameTranslationOverlay
 
             _statusLabel.Text = $"状態: {message}";
             _statusLabel.ForeColor = isError ? Color.Red : Color.DarkBlue;
+        }
+
+        /// <summary>
+        /// 現在選択されている翻訳先言語コードを取得します
+        /// </summary>
+        /// <returns>言語コード</returns>
+        private string GetSelectedTargetLanguage()
+        {
+            if (_targetLanguageComboBox.SelectedIndex >= 0 &&
+                _targetLanguageComboBox.SelectedIndex < LanguageManager.SupportedLanguages.Length)
+            {
+                return LanguageManager.SupportedLanguages[_targetLanguageComboBox.SelectedIndex];
+            }
+            return "ja"; // デフォルトは日本語
+        }
+
+        /// <summary>
+        /// 翻訳ボックスのフォントを更新します
+        /// </summary>
+        /// <param name="languageCode">言語コード</param>
+        private void UpdateTranslationBoxFont(string languageCode)
+        {
+            if (_overlayForm != null && _overlayForm.TranslationBox != null && !_overlayForm.TranslationBox.IsDisposed)
+            {
+                try
+                {
+                    TranslationLanguage language = (languageCode == "ja")
+                        ? TranslationLanguage.Japanese
+                        : TranslationLanguage.English;
+
+                    FontManager.Instance.ApplyTranslationFont(_overlayForm.TranslationBox, language);
+                    Debug.WriteLine($"翻訳ボックスのフォントを{language}用に更新しました");
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"翻訳ボックスのフォント更新時にエラーが発生しました: {ex.Message}");
+                }
+            }
         }
 
         private void SelectWindowButton_Click(object sender, EventArgs e)

@@ -38,7 +38,6 @@ namespace GameTranslationOverlay.Core.UI
         private readonly PrivateFontCollection _privateFontCollection = new PrivateFontCollection();
 
         // フォントファイルパス
-        private string _udFontPath = string.Empty;
         private string _jpFontPath = string.Empty;
         private string _enFontPath = string.Empty;
 
@@ -47,7 +46,6 @@ namespace GameTranslationOverlay.Core.UI
         private bool _isEnFontLoaded = false;
 
         // フォントファミリー名
-        private const string UdFontFamilyName = "UD デジタル 教科書体 NK-R";
         private const string JpFontFamilyName = "LINE Seed JP";
         private const string EnFontFamilyName = "LINE Seed Sans";
         private const string DefaultFontName = "Meiryo UI";
@@ -58,9 +56,6 @@ namespace GameTranslationOverlay.Core.UI
         private float _translationFontSize = 12.0f;
         private float _titleFontSize = 11.0f;
         private float _smallFontSize = 8.0f;
-
-        // カスタムフォントのロード済みフラグ
-        private bool _isUdFontLoaded = false;
 
         // 利用可能なフォントファミリー名のリスト
         private readonly List<string> _availableFontFamilies = new List<string>();
@@ -96,11 +91,6 @@ namespace GameTranslationOverlay.Core.UI
         public Font SmallFont => CreateFont(FontSize.Small);
 
         /// <summary>
-        /// UDデジタル教科書体がロードされているかどうかを示す値を取得します
-        /// </summary>
-        public bool IsUdFontAvailable => _isUdFontLoaded;
-
-        /// <summary>
         /// 日本語フォントがロードされているかどうかを示す値を取得します
         /// </summary>
         public bool IsJpFontAvailable => _isJpFontLoaded;
@@ -127,21 +117,9 @@ namespace GameTranslationOverlay.Core.UI
         public Font CreateFont(FontSize fontSize)
         {
             float size = GetFontSizeValue(fontSize);
-            
+
             try
             {
-                // UDデジタル教科書体が利用可能な場合はそれを使用
-                if (_isUdFontLoaded)
-                {
-                    foreach (FontFamily family in _privateFontCollection.Families)
-                    {
-                        if (family.Name.Contains("UD") && family.Name.Contains("教科書"))
-                        {
-                            return new Font(family, size);
-                        }
-                    }
-                }
-
                 // 利用可能なシステムフォントから最適なものを選択
                 if (IsFontAvailable(DefaultFontName))
                 {
@@ -167,7 +145,7 @@ namespace GameTranslationOverlay.Core.UI
         public Font CreateTranslationFont(TranslationLanguage language)
         {
             float size = GetFontSizeValue(FontSize.Translation);
-            
+
             try
             {
                 switch (language)
@@ -185,7 +163,7 @@ namespace GameTranslationOverlay.Core.UI
                             }
                         }
                         break;
-                        
+
                     case TranslationLanguage.English:
                         // 英語フォントが利用可能な場合
                         if (_isEnFontLoaded)
@@ -200,20 +178,8 @@ namespace GameTranslationOverlay.Core.UI
                         }
                         break;
                 }
-                
-                // 言語別フォントが利用できない場合はUDデジタル教科書体を試す
-                if (_isUdFontLoaded)
-                {
-                    foreach (FontFamily family in _privateFontCollection.Families)
-                    {
-                        if (family.Name.Contains("UD") && family.Name.Contains("教科書"))
-                        {
-                            return new Font(family, size);
-                        }
-                    }
-                }
 
-                // それでも利用できない場合はシステムフォント
+                // 言語別フォントが利用できない場合はシステムフォント
                 if (IsFontAvailable(DefaultFontName))
                 {
                     return new Font(DefaultFontName, size);
@@ -324,37 +290,6 @@ namespace GameTranslationOverlay.Core.UI
         }
 
         /// <summary>
-        /// UDデジタル教科書体フォントファイルを明示的に読み込みます
-        /// </summary>
-        /// <param name="fontFilePath">UDデジタル教科書体フォントファイルのパス</param>
-        /// <returns>読み込みに成功した場合はtrue、それ以外はfalse</returns>
-        public bool LoadUdFont(string fontFilePath)
-        {
-            if (string.IsNullOrEmpty(fontFilePath) || !File.Exists(fontFilePath))
-            {
-                Logger.Instance.Warning("FontManager", $"指定されたフォントファイルが見つかりません: {fontFilePath}");
-                return false;
-            }
-
-            try
-            {
-                // フォントを追加
-                _privateFontCollection.AddFontFile(fontFilePath);
-                _udFontPath = fontFilePath;
-                _isUdFontLoaded = true;
-
-                Logger.Instance.Info("FontManager", $"UDデジタル教科書体を読み込みました: {fontFilePath}");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Logger.Instance.Error("FontManager", $"フォント読み込み中にエラーが発生しました", ex);
-                _isUdFontLoaded = false;
-                return false;
-            }
-        }
-
-        /// <summary>
         /// 日本語翻訳用フォントファイルを読み込みます
         /// </summary>
         /// <param name="fontFilePath">日本語フォントファイルのパス</param>
@@ -416,38 +351,6 @@ namespace GameTranslationOverlay.Core.UI
             }
         }
 
-        /// <summary>
-        /// システムにインストールされているUDデジタル教科書体を検索してロードします
-        /// </summary>
-        /// <returns>ロードに成功した場合はtrue、それ以外はfalse</returns>
-        public bool FindAndLoadSystemUdFont()
-        {
-            try
-            {
-                // システムにインストールされているフォントを取得
-                InstalledFontCollection installedFontCollection = new InstalledFontCollection();
-                
-                // UDデジタル教科書体を検索
-                var udFontFamily = installedFontCollection.Families
-                    .FirstOrDefault(f => f.Name.Contains("UD") && f.Name.Contains("教科書"));
-
-                if (udFontFamily != null)
-                {
-                    Logger.Instance.Info("FontManager", $"システムからUDデジタル教科書体を検出しました: {udFontFamily.Name}");
-                    _isUdFontLoaded = true;
-                    return true;
-                }
-
-                Logger.Instance.Warning("FontManager", "システムにUDデジタル教科書体がインストールされていませんでした。");
-                return false;
-            }
-            catch (Exception ex)
-            {
-                Logger.Instance.Error("FontManager", $"システムフォント検索中にエラーが発生しました", ex);
-                return false;
-            }
-        }
-
         #endregion
 
         #region プライベートメソッド
@@ -464,15 +367,6 @@ namespace GameTranslationOverlay.Core.UI
 
                 // 言語別フォントを読み込む
                 LoadTranslationFonts();
-                
-                // 内部フォントリソースからUDデジタル教科書体を読み込む試行
-                LoadEmbeddedUdFont();
-
-                // 読み込めなかった場合はシステムフォントから検索
-                if (!_isUdFontLoaded)
-                {
-                    FindAndLoadSystemUdFont();
-                }
 
                 // フォントの利用可能状態をログに記録
                 LogFontAvailability();
@@ -490,17 +384,17 @@ namespace GameTranslationOverlay.Core.UI
         {
             // アプリケーションのベースディレクトリ
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            
+
             // フォントディレクトリ
             string fontDir = Path.Combine(baseDir, "Fonts");
-            
+
             // 日本語フォントの読み込み
             string jpFontPath = Path.Combine(fontDir, "LINESeedJP_A_TTF_Rg.ttf");
             if (File.Exists(jpFontPath))
             {
                 LoadJapaneseFontFile(jpFontPath);
             }
-            
+
             // 英語フォントの読み込み
             string enFontPath = Path.Combine(fontDir, "LINESeedSans_A_Rg.ttf");
             if (File.Exists(enFontPath))
@@ -514,59 +408,22 @@ namespace GameTranslationOverlay.Core.UI
         /// </summary>
         private void LogFontAvailability()
         {
-            if (_isUdFontLoaded)
-            {
-                Logger.Instance.Info("FontManager", "UDデジタル教科書体が利用可能です。");
-            }
-            else
-            {
-                Logger.Instance.Info("FontManager", $"UDデジタル教科書体が利用できないため、代替フォントを使用します。");
-            }
-            
             if (_isJpFontLoaded)
             {
                 Logger.Instance.Info("FontManager", "日本語翻訳用フォント(LINESeedJP)が利用可能です。");
             }
-            
+            else
+            {
+                Logger.Instance.Info("FontManager", $"日本語翻訳用フォント(LINESeedJP)が利用できないため、デフォルトフォントを使用します。");
+            }
+
             if (_isEnFontLoaded)
             {
                 Logger.Instance.Info("FontManager", "英語翻訳用フォント(LINESeedSans)が利用可能です。");
             }
-        }
-
-        /// <summary>
-        /// 埋め込みリソースからUDデジタル教科書体を読み込みます
-        /// </summary>
-        private bool LoadEmbeddedUdFont()
-        {
-            try
+            else
             {
-                // アプリケーションのベースディレクトリ
-                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                
-                // フォントを検索する可能性のあるパス
-                string[] possiblePaths = new[]
-                {
-                    Path.Combine(baseDir, "Fonts", "UDDigiKyokashoN-R.ttf"),
-                    Path.Combine(baseDir, "Resources", "Fonts", "UDDigiKyokashoN-R.ttf"),
-                    Path.Combine(baseDir, "UDDigiKyokashoN-R.ttf")
-                };
-
-                foreach (string path in possiblePaths)
-                {
-                    if (File.Exists(path))
-                    {
-                        return LoadUdFont(path);
-                    }
-                }
-
-                Logger.Instance.Warning("FontManager", "埋め込みUDデジタル教科書体フォントが見つかりませんでした。");
-                return false;
-            }
-            catch (Exception ex)
-            {
-                Logger.Instance.Error("FontManager", $"埋め込みフォント読み込み中にエラーが発生しました", ex);
-                return false;
+                Logger.Instance.Info("FontManager", $"英語翻訳用フォント(LINESeedSans)が利用できないため、デフォルトフォントを使用します。");
             }
         }
 
@@ -580,10 +437,8 @@ namespace GameTranslationOverlay.Core.UI
                 if (_privateFontCollection != null)
                 {
                     // privateフォントコレクションをクリアする（.NETでは直接的な方法がない）
-                    _isUdFontLoaded = false;
                     _isJpFontLoaded = false;
                     _isEnFontLoaded = false;
-                    _udFontPath = string.Empty;
                     _jpFontPath = string.Empty;
                     _enFontPath = string.Empty;
                 }

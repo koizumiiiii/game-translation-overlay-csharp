@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using GameTranslationOverlay.Core.Translation.Services;
+using GameTranslationOverlay.Core.UI;
 
 namespace GameTranslationOverlay.Forms
 {
@@ -207,10 +208,19 @@ namespace GameTranslationOverlay.Forms
                 BackColor = Color.FromArgb(30, 30, 30),
                 ForeColor = Color.White,
                 BorderStyle = BorderStyle.None,
-                Font = new Font("Yu Gothic UI", 12F, FontStyle.Regular),
                 Padding = new Padding(10),
                 ScrollBars = RichTextBoxScrollBars.Vertical
             };
+
+            // LINESeedフォントが利用可能な場合は適用、そうでなければデフォルトフォント
+            if (FontManager.Instance.IsJpFontAvailable || FontManager.Instance.IsEnFontAvailable)
+            {
+                _textBox.Font = FontManager.Instance.TranslationFont;
+            }
+            else
+            {
+                _textBox.Font = new Font("Yu Gothic UI", 12F, FontStyle.Regular);
+            }
 
             // コンポーネントをフォームに追加
             this.Controls.Add(_textBox);
@@ -311,6 +321,18 @@ namespace GameTranslationOverlay.Forms
                     string newTargetLang = (detectedLang == "en") ? "ja" : "en";
                     SetTargetLanguage(newTargetLang);
                     Debug.WriteLine($"翻訳テキストから言語を検出: {detectedLang}、選択言語と同じため表示言語を{newTargetLang}に変更しました");
+                }
+
+                // 言語に応じたフォントを適用
+                if (detectedLang == "ja")
+                {
+                    // 日本語テキストには日本語フォントを適用
+                    FontManager.Instance.ApplyTranslationFont(_textBox, TranslationLanguage.Japanese);
+                }
+                else
+                {
+                    // その他の言語（英語など）には英語フォントを適用
+                    FontManager.Instance.ApplyTranslationFont(_textBox, TranslationLanguage.English);
                 }
             }
         }
