@@ -21,6 +21,8 @@ using GameTranslationOverlay.Core.Translation.Interfaces;
 using GameTranslationOverlay.Core.Licensing;
 using GameTranslationOverlay.Core.OCR.AI;
 using GameTranslationOverlay.Core.Configuration;
+using TranslationLanguageManager = GameTranslationOverlay.Core.Translation.Services.LanguageManager;
+using UILanguageManager = GameTranslationOverlay.Core.UI.LanguageManager;
 
 namespace GameTranslationOverlay
 {
@@ -335,13 +337,13 @@ namespace GameTranslationOverlay
                 Size = new Size(100, 21)
             };
 
-            foreach (string langCode in LanguageManager.SupportedLanguages)
+            foreach (string langCode in UILanguageManager.SupportedLanguages)
             {
-                _targetLanguageComboBox.Items.Add(LanguageManager.LanguageNames[langCode]);
+                _targetLanguageComboBox.Items.Add(UILanguageManager.LanguageNames[langCode]);
             }
 
             // 初期値を日本語に設定
-            _targetLanguageComboBox.SelectedIndex = Array.IndexOf(LanguageManager.SupportedLanguages, "ja");
+            _targetLanguageComboBox.SelectedIndex = Array.IndexOf(UILanguageManager.SupportedLanguages, "ja");
             _targetLanguageComboBox.SelectedIndexChanged += TargetLanguageComboBox_SelectedIndexChanged;
 
             // 自動検出チェックボックス
@@ -560,9 +562,9 @@ namespace GameTranslationOverlay
             try
             {
                 int selectedIndex = _targetLanguageComboBox.SelectedIndex;
-                if (selectedIndex >= 0 && selectedIndex < LanguageManager.SupportedLanguages.Length)
+                if (selectedIndex >= 0 && selectedIndex < UILanguageManager.SupportedLanguages.Length)
                 {
-                    string selectedLangCode = LanguageManager.SupportedLanguages[selectedIndex];
+                    string selectedLangCode = UILanguageManager.SupportedLanguages[selectedIndex];
                     _translationManager?.SetPreferredTargetLanguage(selectedLangCode);
                     Debug.WriteLine($"Target language changed to: {selectedLangCode}");
 
@@ -835,7 +837,7 @@ namespace GameTranslationOverlay
                 _translationManager.SetPreferredTargetLanguage(AppSettings.Instance.TargetLanguage);
                 _useAutoDetectCheckBox.Checked = AppSettings.Instance.UseAutoDetect;
                 _targetLanguageComboBox.SelectedIndex = Array.IndexOf(
-                    LanguageManager.SupportedLanguages,
+                    UILanguageManager.SupportedLanguages,
                     AppSettings.Instance.TargetLanguage
                 );
             }
@@ -881,9 +883,9 @@ namespace GameTranslationOverlay
         private string GetSelectedTargetLanguage()
         {
             if (_targetLanguageComboBox.SelectedIndex >= 0 &&
-                _targetLanguageComboBox.SelectedIndex < LanguageManager.SupportedLanguages.Length)
+                _targetLanguageComboBox.SelectedIndex < UILanguageManager.SupportedLanguages.Length)
             {
-                return LanguageManager.SupportedLanguages[_targetLanguageComboBox.SelectedIndex];
+                return UILanguageManager.SupportedLanguages[_targetLanguageComboBox.SelectedIndex];
             }
             return "ja"; // デフォルトは日本語
         }

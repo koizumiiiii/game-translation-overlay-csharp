@@ -6,6 +6,7 @@ using GameTranslationOverlay.Core.OCR;
 using GameTranslationOverlay.Core.Utils;
 using GameTranslationOverlay.Forms;
 using GameTranslationOverlay.Core.Diagnostics;
+using System.IO;
 
 namespace GameTranslationOverlay
 {
@@ -29,46 +30,67 @@ namespace GameTranslationOverlay
         [STAThread]
         static void Main()
         {
+            // 未処理の例外ハンドラ
+            AppDomain.CurrentDomain.UnhandledException += (sender, args) =>
+            {
+                Exception ex = (Exception)args.ExceptionObject;
+                try
+                {
+                    using (StreamWriter writer = new StreamWriter("crash_log.txt", true))
+                    {
+                        writer.WriteLine($"[{DateTime.Now}] 未処理の例外が発生しました:");
+                        writer.WriteLine(ex.ToString());
+                        writer.WriteLine(new string('-', 80));
+                    }
+                }
+                catch { }
+
+                MessageBox.Show($"未処理の例外が発生しました: {ex.Message}\n\n{ex.StackTrace}",
+                    "エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            };
+
+            // UIスレッドの例外ハンドラ
+            Application.ThreadException += (sender, args) =>
+            {
+                try
+                {
+                    using (StreamWriter writer = new StreamWriter("crash_log.txt", true))
+                    {
+                        writer.WriteLine($"[{DateTime.Now}] UIスレッドの例外:");
+                        writer.WriteLine(args.Exception.ToString());
+                        writer.WriteLine(new string('-', 80));
+                    }
+                }
+                catch { }
+
+                MessageBox.Show($"UIスレッドで例外が発生しました: {args.Exception.Message}\n\n{args.Exception.StackTrace}",
+                    "エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            };
+
             try
             {
-                // グローバル例外ハンドラーの設定
-                Application.ThreadException += Application_ThreadException;
-                AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
-
-                // UIスレッド以外の例外をキャッチするためのハンドラ
-                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
-
-                // Windows Formsアプリケーションの設定
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
 
-                // ディレクトリの確認と作成
-                EnsureApplicationDirectories();
-
-                // Loggerの初期化
-                InitializeLogger();
-
-                // アプリケーション終了時の処理を設定
-                Application.ApplicationExit += (s, e) =>
-                {
-                    Debug.WriteLine("アプリケーションが終了しています...");
-                    CleanupResources();
-                    ApplicationExit?.Invoke(s, e);
-                };
-
-                // アプリケーションの起動処理を実行
-                Debug.WriteLine("アプリケーションを初期化しています...");
-
-                // OCRマネージャーの初期化
-                OcrManager ocrManager = InitializeOcrManager();
-
-                // メインフォームの作成と実行
-                var mainForm = new MainForm();
+                // MainFormのインスタンス化と実行
+                MainForm mainForm = new MainForm();
+                Application.Run(mainForm);
             }
             catch (Exception ex)
             {
-                // 起動中の致命的なエラーを処理
-                HandleFatalError(ex, "アプリケーションの起動中にエラーが発生しました");
+                try
+                {
+                    using (StreamWriter writer = new StreamWriter("crash_log.txt", true))
+                    {
+                        writer.WriteLine($"[{DateTime.Now}] Application.Run中の例外:");
+                        writer.WriteLine(ex.ToString());
+                        writer.WriteLine(new string('-', 80));
+                    }
+                }
+                catch { }
+
+                MessageBox.Show($"アプリケーション実行中に例外が発生しました: {ex.Message}\n\n{ex.StackTrace}",
+                    "エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 

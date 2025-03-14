@@ -101,6 +101,7 @@
     <Compile Include="Core\Translation\Services\TranslationManager.cs" />
     <Compile Include="Core\Translation\Utils\ErrorHandlingExtensions.cs" />
     <Compile Include="Core\UI\FontManager.cs" />
+    <Compile Include="Core\UI\LanguageManager.cs" />
     <Compile Include="Core\UI\WindowSelector.cs" />
     <Compile Include="Core\Utils\AdaptiveCacheManager.cs" />
     <Compile Include="Core\Utils\AdaptiveDetectionInterval.cs" />
@@ -170,8 +171,12 @@
   <ItemGroup>
     <None Include=".docker\docker-compose.yml" />
     <None Include="App.config" />
-    <None Include="Fonts\LINESeedJP_A_TTF_Rg.ttf" />
-    <None Include="Fonts\LINESeedSans_A_Rg.ttf" />
+    <Content Include="Fonts\LINESeedJP_A_TTF_Rg.ttf">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Fonts\LINESeedSans_A_Rg.ttf">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <None Include="packages.config" />
     <None Include="PaddleOCRModels\ch_PP-OCRv3_det\inference.pdiparams">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

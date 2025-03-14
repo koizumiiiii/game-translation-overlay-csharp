@@ -6,6 +6,8 @@ using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using GameTranslationOverlay.Core.Translation.Services;
 using GameTranslationOverlay.Core.UI;
+using TranslationLanguageManager = GameTranslationOverlay.Core.Translation.Services.LanguageManager;
+using UILanguageManager = GameTranslationOverlay.Core.UI.LanguageManager;
 
 namespace GameTranslationOverlay.Forms
 {
@@ -113,13 +115,13 @@ namespace GameTranslationOverlay.Forms
             };
 
             // 言語選択肢を追加
-            foreach (string langCode in LanguageManager.SupportedLanguages)
+            foreach (string langCode in UILanguageManager.SupportedLanguages)
             {
-                _targetLanguageComboBox.Items.Add(LanguageManager.LanguageNames[langCode]);
+                _targetLanguageComboBox.Items.Add(UILanguageManager.LanguageNames[langCode]);
             }
 
             // 初期言語を日本語に設定
-            _targetLanguageComboBox.SelectedIndex = Array.IndexOf(LanguageManager.SupportedLanguages, "ja");
+            _targetLanguageComboBox.SelectedIndex = Array.IndexOf(UILanguageManager.SupportedLanguages, "ja");
 
             // ツールチップを設定
             _toolTip.SetToolTip(_targetLanguageComboBox, "翻訳先の言語を選択します");
@@ -129,7 +131,7 @@ namespace GameTranslationOverlay.Forms
             {
                 if (_targetLanguageComboBox.SelectedIndex >= 0)
                 {
-                    string selectedLang = LanguageManager.SupportedLanguages[_targetLanguageComboBox.SelectedIndex];
+                    string selectedLang = UILanguageManager.SupportedLanguages[_targetLanguageComboBox.SelectedIndex];
 
                     // 翻訳マネージャーに設定
                     if (_translationManager != null)
@@ -166,7 +168,7 @@ namespace GameTranslationOverlay.Forms
                 // イベント発火して外部（MainForm）に通知
                 if (_targetLanguageComboBox.SelectedIndex >= 0)
                 {
-                    string selectedLang = LanguageManager.SupportedLanguages[_targetLanguageComboBox.SelectedIndex];
+                    string selectedLang = UILanguageManager.SupportedLanguages[_targetLanguageComboBox.SelectedIndex];
                     OnTranslationSettingsChanged(selectedLang, _useAutoDetect);
                 }
 
@@ -276,7 +278,7 @@ namespace GameTranslationOverlay.Forms
                 return;
             }
 
-            int index = Array.IndexOf(LanguageManager.SupportedLanguages, languageCode);
+            int index = Array.IndexOf(UILanguageManager.SupportedLanguages, languageCode);
             if (index >= 0)
             {
                 _targetLanguageComboBox.SelectedIndex = index;
@@ -312,7 +314,7 @@ namespace GameTranslationOverlay.Forms
             // テキストが日本語かどうかを判断し、言語設定を自動調整（必要に応じて）
             if (_useAutoDetect && !string.IsNullOrEmpty(text) && text.Length > 5)
             {
-                string detectedLang = LanguageManager.DetectLanguage(text);
+                string detectedLang = TranslationLanguageManager.DetectLanguage(text);
 
                 // 検出された言語が現在選択されている言語と同じ場合は、別の言語に切り替える
                 if (detectedLang == GetSelectedTargetLanguage())
@@ -353,9 +355,9 @@ namespace GameTranslationOverlay.Forms
         public string GetSelectedTargetLanguage()
         {
             if (_targetLanguageComboBox.SelectedIndex >= 0 &&
-                _targetLanguageComboBox.SelectedIndex < LanguageManager.SupportedLanguages.Length)
+                _targetLanguageComboBox.SelectedIndex < UILanguageManager.SupportedLanguages.Length)
             {
-                return LanguageManager.SupportedLanguages[_targetLanguageComboBox.SelectedIndex];
+                return UILanguageManager.SupportedLanguages[_targetLanguageComboBox.SelectedIndex];
             }
             return "ja"; // デフォルト
         }
