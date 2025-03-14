@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Threading.Tasks;
 using System.Linq;
 using GameTranslationOverlay.Core.Utils;
+using GameTranslationOverlay.Core.Configuration;
 
 namespace GameTranslationOverlay.Core.OCR
 {
@@ -44,6 +45,10 @@ namespace GameTranslationOverlay.Core.OCR
         private readonly Dictionary<int, List<TextRegion>> _ocrCache = new Dictionary<int, List<TextRegion>>();
         private const int MAX_CACHE_ENTRIES = 20;
         private DateTime _lastCacheCleanupTime = DateTime.MinValue;
+
+        // ゲームプロファイル連携
+        private string _currentGameTitle = string.Empty;
+        private GameProfiles _gameProfiles = null;
 
         /// <summary>
         /// コンストラクタ
@@ -87,6 +92,9 @@ namespace GameTranslationOverlay.Core.OCR
         /// <returns>検出されたテキスト領域のリスト</returns>
         public async Task<List<TextRegion>> DetectTextRegionsAsync(Bitmap image)
         {
+            // メモリ使用量をチェック
+            MemoryManagement.CheckMemoryUsage();
+
             // 並行処理のチェック
             if (_processingActive)
             {
@@ -392,6 +400,47 @@ namespace GameTranslationOverlay.Core.OCR
                 }
             }
 
+            // 成功した結果がある場合、自動的にプロファイルを更新を検討
+            if (regions.Count > 0 && !string.IsNullOrWhiteSpace(_currentGameTitle) && _gameProfiles != null)
+            {
+                // 10個以上の領域が見つかった場合は有用な設定と判断
+                if (regions.Count >= 10 && _processingTimes.Count > 0)
+                {
+                    // 直近の処理時間が良好（500ms以下）かつ検出結果が多い場合、自動保存
+                    double lastProcessingTime = _processingTimes.Last();
+                    if (lastProcessingTime <= 500)
+                    {
+                        Debug.WriteLine($"検出結果が良好 ({regions.Count}領域, {lastProcessingTime:F1}ms)なため、プロファイル自動更新を検討");
+
+                        // 既存プロファイルと現在の設定を比較して更新するか決定
+                        var existingProfile = _gameProfiles.GetProfile(_currentGameTitle);
+                        bool shouldUpdate = false;
+
+                        if (existingProfile == null || !existingProfile.IsOptimized)
+                        {
+                            // プロファイルがないか最適化されていない場合は保存
+                            shouldUpdate = true;
+                        }
+                        else
+                        {
+                            // 最後の最適化から1週間以上経過している場合は更新を検討
+                            TimeSpan timeSinceLastUpdate = DateTime.Now - existingProfile.LastOptimized;
+                            if (timeSinceLastUpdate.TotalDays > 7)
+                            {
+                                // 現在の結果が既存より良いか（領域数で判断）
+                                shouldUpdate = true;
+                            }
+                        }
+
+                        // 更新条件を満たす場合はプロファイル保存
+                        if (shouldUpdate)
+                        {
+                            SaveProfileForCurrentGame();
+                        }
+                    }
+                }
+            }
+
             // すべての試行が失敗した場合は空のリストを返す
             return new List<TextRegion>();
         }
@@ -586,6 +635,65 @@ namespace GameTranslationOverlay.Core.OCR
         }
 
         /// <summary>
+        /// メモリ使用量を監視・管理する内部クラス
+        /// </summary>
+        private class MemoryManagement
+        {
+            private static readonly long HighMemoryThresholdMB = 300; // 高メモリ使用と判断する閾値（MB）
+            private static readonly TimeSpan MonitorInterval = TimeSpan.FromMinutes(5); // 監視間隔
+            private static DateTime _lastCheck = DateTime.MinValue;
+
+            /// <summary>
+            /// メモリ使用量を確認し、必要に応じてクリーンアップを実行
+            /// </summary>
+            public static void CheckMemoryUsage()
+            {
+                // 前回のチェックから一定時間が経過していない場合はスキップ
+                if (DateTime.Now - _lastCheck < MonitorInterval)
+                {
+                    return;
+                }
+
+                _lastCheck = DateTime.Now;
+
+                try
+                {
+                    using (Process currentProcess = Process.GetCurrentProcess())
+                    {
+                        // 現在のメモリ使用量を取得（MB単位）
+                        long memoryUsageMB = currentProcess.PrivateMemorySize64 / (1024 * 1024);
+
+                        Debug.WriteLine($"メモリ使用量: {memoryUsageMB}MB");
+
+                        // 高メモリ使用の場合、クリーンアップを促進
+                        if (memoryUsageMB > HighMemoryThresholdMB)
+                        {
+                            Debug.WriteLine($"高メモリ使用を検出（{memoryUsageMB}MB）: クリーンアップを実行します");
+
+                            // リソースマネージャーのクリーンアップを促進
+                            ResourceManager.CleanupDeadReferences();
+
+                            // GCの実行を促進
+                            GC.Collect();
+                            GC.WaitForPendingFinalizers();
+
+                            // 2回目のGC（断片化対策）
+                            GC.Collect();
+
+                            // クリーンアップ後のメモリ使用量を確認
+                            long afterCleanupMB = currentProcess.PrivateMemorySize64 / (1024 * 1024);
+                            Debug.WriteLine($"クリーンアップ後のメモリ使用量: {afterCleanupMB}MB（{memoryUsageMB - afterCleanupMB}MB削減）");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"メモリ使用量確認エラー: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>
         /// リソースの解放
         /// </summary>
         public void Dispose()
@@ -620,5 +728,111 @@ namespace GameTranslationOverlay.Core.OCR
         {
             Dispose(false);
         }
+
+        /// <summary>
+        /// ゲームプロファイル管理クラスを設定
+        /// </summary>
+        /// <param name="gameProfiles">ゲームプロファイル管理クラス</param>
+        public void SetGameProfiles(GameProfiles gameProfiles)
+        {
+            _gameProfiles = gameProfiles;
+            Debug.WriteLine("ゲームプロファイル管理クラスを設定しました");
+        }
+
+        /// <summary>
+        /// 現在のゲームタイトルを設定し、プロファイルがあれば適用
+        /// </summary>
+        /// <param name="gameTitle">ゲームタイトル</param>
+        /// <returns>プロファイルが適用された場合はtrue</returns>
+        public bool SetCurrentGame(string gameTitle)
+        {
+            if (string.IsNullOrWhiteSpace(gameTitle))
+            {
+                Debug.WriteLine("ゲームタイトルが空のため、プロファイル適用をスキップします");
+                return false;
+            }
+
+            _currentGameTitle = gameTitle;
+            Debug.WriteLine($"現在のゲーム: {_currentGameTitle}");
+
+            // プロファイルがあれば適用
+            return ApplyProfileForCurrentGame();
+        }
+
+        /// <summary>
+        /// 現在のゲームのプロファイルを適用
+        /// </summary>
+        /// <returns>プロファイルが適用された場合はtrue</returns>
+        public bool ApplyProfileForCurrentGame()
+        {
+            if (_gameProfiles == null || string.IsNullOrWhiteSpace(_currentGameTitle))
+            {
+                return false;
+            }
+
+            try
+            {
+                // プロファイル取得
+                var settings = _gameProfiles.GetProfile(_currentGameTitle);
+                if (settings == null || !settings.IsOptimized)
+                {
+                    Debug.WriteLine($"ゲーム '{_currentGameTitle}' の有効なプロファイルがありません");
+                    return false;
+                }
+
+                // 設定適用
+                SetConfidenceThreshold(settings.ConfidenceThreshold);
+                SetPreprocessingOptions(settings.PreprocessingOptions);
+                EnablePreprocessing(true);
+
+                Debug.WriteLine($"ゲーム '{_currentGameTitle}' のプロファイルを適用しました（信頼度: {settings.ConfidenceThreshold:F2}）");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"プロファイル適用エラー: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 現在のゲームのプロファイルを保存/更新
+        /// </summary>
+        /// <returns>保存に成功した場合はtrue</returns>
+        public bool SaveProfileForCurrentGame()
+        {
+            if (_gameProfiles == null || string.IsNullOrWhiteSpace(_currentGameTitle))
+            {
+                Debug.WriteLine("ゲームプロファイル保存: ゲームプロファイル管理またはゲームタイトルが未設定");
+                return false;
+            }
+
+            try
+            {
+                // 既存のプロファイルがあれば取得
+                var existingSettings = _gameProfiles.GetProfile(_currentGameTitle);
+                int optimizationAttempts = existingSettings?.OptimizationAttempts ?? 0;
+
+                // 現在の設定でプロファイルを作成/更新
+                var settings = new OCR.AI.OcrOptimizer.OptimalSettings
+                {
+                    ConfidenceThreshold = _confidenceThreshold,
+                    PreprocessingOptions = _adaptivePreprocessor.CurrentPreprocessingOptions,
+                    LastOptimized = DateTime.Now,
+                    OptimizationAttempts = optimizationAttempts + 1,
+                    IsOptimized = true
+                };
+
+                // プロファイル保存
+                _gameProfiles.SaveProfile(_currentGameTitle, settings);
+                Debug.WriteLine($"ゲーム '{_currentGameTitle}' のプロファイルを保存しました");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"プロファイル保存エラー: {ex.Message}");
+                return false;
+            }
+        }  
     }
 }

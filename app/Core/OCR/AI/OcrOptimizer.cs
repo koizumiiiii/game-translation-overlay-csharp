@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using GameTranslationOverlay.Core.Configuration;
 using GameTranslationOverlay.Core.Diagnostics;
 using GameTranslationOverlay.Core.Security;
 using GameTranslationOverlay.Core.Utils;
@@ -42,6 +43,36 @@ namespace GameTranslationOverlay.Core.OCR.AI
             public int OptimizationAttempts { get; set; } = 1;
             public bool IsOptimized { get; set; } = false;
             public Dictionary<string, object> AiSuggestions { get; set; } = new Dictionary<string, object>();
+
+            /// <summary>
+            /// ゲームプロファイルから互換性のある設定を作成
+            /// </summary>
+            /// <param name="profileSettings">プロファイルの設定</param>
+            /// <returns>新しいOptimalSettings</returns>
+            public static OptimalSettings FromProfile(OptimalSettings profileSettings)
+            {
+                if (profileSettings == null)
+                    return null;
+
+                return new OptimalSettings
+                {
+                    ConfidenceThreshold = profileSettings.ConfidenceThreshold,
+                    PreprocessingOptions = new GameTranslationOverlay.Core.Utils.PreprocessingOptions
+                    {
+                        ContrastLevel = profileSettings.PreprocessingOptions.ContrastLevel,
+                        BrightnessLevel = profileSettings.PreprocessingOptions.BrightnessLevel,
+                        SharpnessLevel = profileSettings.PreprocessingOptions.SharpnessLevel,
+                        NoiseReduction = profileSettings.PreprocessingOptions.NoiseReduction,
+                        ScaleFactor = profileSettings.PreprocessingOptions.ScaleFactor,
+                        Threshold = profileSettings.PreprocessingOptions.Threshold,
+                        Padding = profileSettings.PreprocessingOptions.Padding
+                    },
+                    LastOptimized = profileSettings.LastOptimized,
+                    OptimizationAttempts = profileSettings.OptimizationAttempts,
+                    IsOptimized = profileSettings.IsOptimized,
+                    AiSuggestions = new Dictionary<string, object>(profileSettings.AiSuggestions ?? new Dictionary<string, object>())
+                };
+            }
         }
 
         #endregion
@@ -134,16 +165,44 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 Debug.WriteLine($"Detected language: {(isJapaneseText ? "Japanese" : "Non-Japanese")}");
 
                 // AIを使ってテキスト領域を抽出（「正解」データとして使用）
-                List<TextRegion> aiTextRegions;
-                if (isJapaneseText)
+                List<TextRegion> aiTextRegions = new List<TextRegion>();
+                try
                 {
-                    // 日本語テキストの場合はGPT-4 Visionを使用
-                    aiTextRegions = await _visionClient.ExtractTextWithGpt4Vision(sampleScreen);
+                    if (isJapaneseText)
+                    {
+                        // 日本語テキストの場合はGPT-4 Visionを使用
+                        aiTextRegions = await _visionClient.ExtractTextWithGpt4Vision(sampleScreen);
+                    }
+                    else
+                    {
+                        // 英語などのテキストの場合はGemini Pro Visionを使用
+                        aiTextRegions = await _visionClient.ExtractTextWithGeminiVision(sampleScreen);
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    // 英語などのテキストの場合はGemini Pro Visionを使用
-                    aiTextRegions = await _visionClient.ExtractTextWithGeminiVision(sampleScreen);
+                    Debug.WriteLine($"プライマリAIでのテキスト抽出エラー: {ex.Message}");
+
+                    // 代替APIを試行
+                    try
+                    {
+                        Debug.WriteLine($"代替AIサービスを使用して再試行します...");
+                        if (isJapaneseText)
+                        {
+                            // 代替としてGemini Visionを使用
+                            aiTextRegions = await _visionClient.ExtractTextWithGeminiVision(sampleScreen);
+                        }
+                        else
+                        {
+                            // 代替としてGPT-4 Visionを使用
+                            aiTextRegions = await _visionClient.ExtractTextWithGpt4Vision(sampleScreen);
+                        }
+                    }
+                    catch (Exception fallbackEx)
+                    {
+                        Debug.WriteLine($"代替AIサービスでもエラー: {fallbackEx.Message}");
+                        throw new InvalidOperationException($"テキスト抽出中にエラーが発生しました: {ex.Message}", ex);
+                    }
                 }
 
                 if (aiTextRegions.Count == 0)
@@ -232,6 +291,63 @@ namespace GameTranslationOverlay.Core.OCR.AI
             {
                 Debug.WriteLine($"Error during OCR optimization: {ex.Message}");
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// ゲームプロファイルから最適化設定を読み込んで適用する
+        /// </summary>
+        /// <param name="gameTitle">ゲームタイトル</param>
+        /// <param name="gameProfiles">ゲームプロファイル管理クラス</param>
+        /// <returns>適用に成功した場合はtrue</returns>
+        public bool ApplyFromGameProfiles(string gameTitle, GameProfiles gameProfiles)
+        {
+            if (string.IsNullOrWhiteSpace(gameTitle) || gameProfiles == null)
+            {
+                Debug.WriteLine("ゲームタイトルまたはプロファイルがnullのため、設定を適用できません");
+                return false;
+            }
+
+            try
+            {
+                // プロファイルから設定を取得
+                var settings = gameProfiles.GetProfile(gameTitle);
+                if (settings == null)
+                {
+                    Debug.WriteLine($"ゲーム '{gameTitle}' のプロファイルが見つかりません");
+                    return false;
+                }
+
+                // 設定が最適化済みか確認
+                if (!settings.IsOptimized)
+                {
+                    Debug.WriteLine($"ゲーム '{gameTitle}' のプロファイルは最適化されていません");
+                    return false;
+                }
+
+                // 最適化設定をOCRエンジンに適用
+                if (_ocrEngine is OcrManager manager)
+                {
+                    manager.SetConfidenceThreshold(settings.ConfidenceThreshold);
+                    manager.SetPreprocessingOptions(settings.PreprocessingOptions);
+                    manager.EnablePreprocessing(true);
+
+                    // 最適化履歴に追加（既存の場合は上書き）
+                    _optimizationHistory[gameTitle] = settings;
+
+                    Debug.WriteLine($"ゲーム '{gameTitle}' の最適化設定を適用しました（信頼度: {settings.ConfidenceThreshold:F2}）");
+                    return true;
+                }
+                else
+                {
+                    Debug.WriteLine("OCRマネージャーが見つからないため、設定を適用できません");
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"ゲームプロファイル適用エラー: {ex.Message}");
+                return false;
             }
         }
 
@@ -354,10 +470,20 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     return false;
                 }
 
-                // すべてのテキストを連結（小さすぎるテキストは除外）
-                string allText = string.Join(" ", regions
-                    .Where(r => !string.IsNullOrWhiteSpace(r.Text) && r.Text.Length >= 3)
-                    .Select(r => r.Text));
+                // 信頼度の高いテキスト領域のみを使用（ノイズ除去）
+                var validRegions = regions.Where(r =>
+                    !string.IsNullOrWhiteSpace(r.Text) &&
+                    r.Text.Length >= 3 &&
+                    r.Confidence >= 0.5f).ToList();
+
+                if (validRegions.Count == 0)
+                {
+                    Debug.WriteLine("有効なテキスト領域が検出されなかったためデフォルトの英語と判断");
+                    return false;
+                }
+
+                // すべてのテキストを連結
+                string allText = string.Join(" ", validRegions.Select(r => r.Text));
 
                 // テキストがない場合
                 if (string.IsNullOrWhiteSpace(allText))
@@ -367,9 +493,7 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 }
 
                 // 言語を検出
-                string language = LanguageDetector.DetectLanguage(allText);
-                bool isJapanese = language == "ja";
-
+                bool isJapanese = IsJapaneseTextDominant(allText);
                 Debug.WriteLine($"言語検出結果: {(isJapanese ? "日本語" : "日本語以外")}, テキスト: {allText.Substring(0, Math.Min(50, allText.Length))}...");
 
                 return isJapanese;
@@ -379,6 +503,30 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 Debug.WriteLine($"日本語検出エラー: {ex.Message}");
                 return false;
             }
+        }
+
+        // IsJapaneseTextDominant メソッドを追加（より正確な日本語検出）
+        private bool IsJapaneseTextDominant(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+
+            // 日本語文字（ひらがな、カタカナ、漢字）のカウント
+            int japaneseChars = text.Count(c =>
+                (c >= 0x3040 && c <= 0x309F) || // ひらがな
+                (c >= 0x30A0 && c <= 0x30FF) || // カタカナ
+                (c >= 0x4E00 && c <= 0x9FFF));  // 漢字の一部
+
+            // 合計文字数（空白を除く）
+            int totalNonSpaceChars = text.Count(c => !char.IsWhiteSpace(c));
+
+            if (totalNonSpaceChars == 0) return false;
+
+            // 日本語文字の割合を計算
+            double japaneseRatio = (double)japaneseChars / totalNonSpaceChars;
+
+            // 日本語文字が15%以上あれば日本語主体と判定
+            // ゲーム画面では混合テキストが多いため、比率を低めに設定
+            return japaneseRatio >= 0.15;
         }
 
         /// <summary>

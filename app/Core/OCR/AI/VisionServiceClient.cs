@@ -37,9 +37,14 @@ namespace GameTranslationOverlay.Core.OCR.AI
         public VisionServiceClient()
         {
             _httpClient = new HttpClient();
-            _httpClient.Timeout = TimeSpan.FromSeconds(30);
+            _httpClient.Timeout = TimeSpan.FromSeconds(60); // タイムアウトを60秒に延長
             _keyProtector = ApiMultiKeyProtector.Instance;
-            // Loggerのインスタンス化は行わない
+
+            // HTTP要求ヘッダーのデフォルト設定
+            _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("GameTranslationOverlay/1.0");
+
+            Debug.WriteLine("VisionServiceClient: 初期化完了");
         }
 
         /// <summary>
@@ -202,6 +207,9 @@ namespace GameTranslationOverlay.Core.OCR.AI
         /// </summary>
         private async Task<string> SendRequestToGpt4Vision(string apiKey, string base64Image)
         {
+            Stopwatch stopwatch = new Stopwatch();
+            stopwatch.Start();
+
             try
             {
                 _httpClient.DefaultRequestHeaders.Clear();
@@ -214,45 +222,81 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     model = "gpt-4-vision-preview",
                     messages = new[]
                     {
+                new
+                {
+                    role = "user",
+                    content = new object[]
+                    {
+                        new { type = "text", text = "Extract all visible text from this game screenshot. For each text element, provide the exact text content and its position (x, y, width, height) in the image. Format as JSON with an array of text regions. Be extremely accurate with the text content." },
                         new
                         {
-                            role = "user",
-                            content = new object[]
+                            type = "image_url",
+                            image_url = new
                             {
-                                new { type = "text", text = "Extract all visible text from this game screenshot. For each text element, provide the exact text content and its position (x, y, width, height) in the image. Format as JSON with an array of text regions. Be extremely accurate with the text content." },
-                                new
-                                {
-                                    type = "image_url",
-                                    image_url = new
-                                    {
-                                        url = $"data:image/jpeg;base64,{base64Image}"
-                                    }
-                                }
+                                url = $"data:image/jpeg;base64,{base64Image}"
                             }
                         }
-                    },
-                    max_tokens = 1000
+                    }
+                }
+            },
+                    max_tokens = 1500  // トークン数を増やして長いテキストにも対応
                 };
 
                 string json = JsonConvert.SerializeObject(requestBody);
                 StringContent content = new StringContent(json, Encoding.UTF8, "application/json");
 
                 Debug.WriteLine("GPT-4 Vision APIリクエスト送信中...");
-                HttpResponseMessage response = await _httpClient.PostAsync(OPENAI_API_URL, content);
 
-                if (!response.IsSuccessStatusCode)
+                // キャンセルトークンの作成（タイムアウト管理用）
+                using (var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(55)))
                 {
-                    string errorContent = await response.Content.ReadAsStringAsync();
-                    Debug.WriteLine($"GPT-4 Vision APIエラー: {response.StatusCode} - {errorContent}");
-                    throw new HttpRequestException($"GPT-4 Vision APIエラー: {response.StatusCode}");
-                }
+                    HttpResponseMessage response = await _httpClient.PostAsync(OPENAI_API_URL, content, cts.Token);
 
-                string responseContent = await response.Content.ReadAsStringAsync();
-                Debug.WriteLine("GPT-4 Vision APIレスポンス受信: " + responseContent.Substring(0, Math.Min(100, responseContent.Length)) + "...");
-                return responseContent;
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        string errorContent = await response.Content.ReadAsStringAsync();
+                        Debug.WriteLine($"GPT-4 Vision APIエラー: {response.StatusCode} - {errorContent}");
+
+                        // エラーコードに応じた処理
+                        if ((int)response.StatusCode == 429) // 429 = Too Many Requests
+                        {
+                            throw new Exception("APIレート制限に達しました。しばらく待ってから再試行してください。");
+                        }
+                        else if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                        {
+                            throw new Exception("API認証エラー: APIキーが無効または期限切れです。");
+                        }
+                        else
+                        {
+                            throw new HttpRequestException($"GPT-4 Vision APIエラー: {response.StatusCode} - {errorContent.Substring(0, Math.Min(200, errorContent.Length))}");
+                        }
+                    }
+
+                    string responseContent = await response.Content.ReadAsStringAsync();
+
+                    // レスポンスの長さをログに記録
+                    int responseLength = responseContent.Length;
+                    stopwatch.Stop();
+                    Debug.WriteLine($"GPT-4 Vision APIレスポンス受信: 長さ={responseLength}バイト, 処理時間={stopwatch.ElapsedMilliseconds}ms");
+
+                    // 簡易的なレスポンス検証
+                    if (string.IsNullOrWhiteSpace(responseContent) || !responseContent.Contains("choices"))
+                    {
+                        throw new Exception("GPT-4 Vision APIから無効なレスポンスが返されました。");
+                    }
+
+                    return responseContent;
+                }
+            }
+            catch (TaskCanceledException)
+            {
+                stopwatch.Stop();
+                Debug.WriteLine($"GPT-4 Vision APIリクエストがタイムアウトしました（{stopwatch.ElapsedMilliseconds}ms経過）");
+                throw new TimeoutException("GPT-4 Vision APIリクエストがタイムアウトしました。ネットワーク接続を確認してください。");
             }
             catch (Exception ex)
             {
+                stopwatch.Stop();
                 Debug.WriteLine($"GPT-4 Vision APIリクエスト中にエラーが発生しました: {ex.Message}");
                 throw;
             }
@@ -263,6 +307,9 @@ namespace GameTranslationOverlay.Core.OCR.AI
         /// </summary>
         private async Task<string> SendRequestToGeminiVision(string apiKey, string base64Image)
         {
+            Stopwatch stopwatch = new Stopwatch();
+            stopwatch.Start();
+
             try
             {
                 _httpClient.DefaultRequestHeaders.Clear();
@@ -273,21 +320,26 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 {
                     contents = new[]
                     {
+                new
+                {
+                    parts = new object[]
+                    {
+                        new { text = "Extract all visible text from this game screenshot. For each text element, provide the exact text content and its position (x, y, width, height) in the image. Format as JSON with an array of text regions. Be extremely accurate with the text content." },
                         new
                         {
-                            parts = new object[]
+                            inline_data = new
                             {
-                                new { text = "Extract all visible text from this game screenshot. For each text element, provide the exact text content and its position (x, y, width, height) in the image. Format as JSON with an array of text regions. Be extremely accurate with the text content." },
-                                new
-                                {
-                                    inline_data = new
-                                    {
-                                        mime_type = "image/jpeg",
-                                        data = base64Image
-                                    }
-                                }
+                                mime_type = "image/jpeg",
+                                data = base64Image
                             }
                         }
+                    }
+                }
+            },
+                    generationConfig = new
+                    {
+                        temperature = 0.1,  // 創造性を抑え、より確実な抽出を促進
+                        maxOutputTokens = 1500  // より長い応答を許可
                     }
                 };
 
@@ -296,21 +348,57 @@ namespace GameTranslationOverlay.Core.OCR.AI
 
                 string apiUrlWithKey = $"{GEMINI_API_URL}?key={apiKey}";
                 Debug.WriteLine("Gemini Pro Vision APIリクエスト送信中...");
-                HttpResponseMessage response = await _httpClient.PostAsync(apiUrlWithKey, content);
 
-                if (!response.IsSuccessStatusCode)
+                // キャンセルトークンの作成（タイムアウト管理用）
+                using (var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(55)))
                 {
-                    string errorContent = await response.Content.ReadAsStringAsync();
-                    Debug.WriteLine($"Gemini Pro Vision APIエラー: {response.StatusCode} - {errorContent}");
-                    throw new HttpRequestException($"Gemini Pro Vision APIエラー: {response.StatusCode}");
-                }
+                    HttpResponseMessage response = await _httpClient.PostAsync(apiUrlWithKey, content, cts.Token);
 
-                string responseContent = await response.Content.ReadAsStringAsync();
-                Debug.WriteLine("Gemini Pro Vision APIレスポンス受信: " + responseContent.Substring(0, Math.Min(100, responseContent.Length)) + "...");
-                return responseContent;
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        string errorContent = await response.Content.ReadAsStringAsync();
+                        Debug.WriteLine($"Gemini Pro Vision APIエラー: {response.StatusCode} - {errorContent}");
+
+                        // エラーコードに応じた処理
+                        if ((int)response.StatusCode == 429) // 429 = Too Many Requests
+                        {
+                            throw new Exception("APIレート制限に達しました。しばらく待ってから再試行してください。");
+                        }
+                        else if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+                        {
+                            throw new Exception("API認証エラー: APIキーが無効または期限切れです。");
+                        }
+                        else
+                        {
+                            throw new HttpRequestException($"Gemini Pro Vision APIエラー: {response.StatusCode} - {errorContent.Substring(0, Math.Min(200, errorContent.Length))}");
+                        }
+                    }
+
+                    string responseContent = await response.Content.ReadAsStringAsync();
+
+                    // レスポンスの長さをログに記録
+                    int responseLength = responseContent.Length;
+                    stopwatch.Stop();
+                    Debug.WriteLine($"Gemini Pro Vision APIレスポンス受信: 長さ={responseLength}バイト, 処理時間={stopwatch.ElapsedMilliseconds}ms");
+
+                    // 簡易的なレスポンス検証
+                    if (string.IsNullOrWhiteSpace(responseContent) || !responseContent.Contains("candidates"))
+                    {
+                        throw new Exception("Gemini Pro Vision APIから無効なレスポンスが返されました。");
+                    }
+
+                    return responseContent;
+                }
+            }
+            catch (TaskCanceledException)
+            {
+                stopwatch.Stop();
+                Debug.WriteLine($"Gemini Pro Vision APIリクエストがタイムアウトしました（{stopwatch.ElapsedMilliseconds}ms経過）");
+                throw new TimeoutException("Gemini Pro Vision APIリクエストがタイムアウトしました。ネットワーク接続を確認してください。");
             }
             catch (Exception ex)
             {
+                stopwatch.Stop();
                 Debug.WriteLine($"Gemini Pro Vision APIリクエスト中にエラーが発生しました: {ex.Message}");
                 throw;
             }
@@ -471,13 +559,31 @@ namespace GameTranslationOverlay.Core.OCR.AI
         {
             try
             {
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    Debug.WriteLine("JSON抽出: 入力テキストが空です");
+                    return null;
+                }
+
                 // 標準的なJSONブロックをパターン検索
                 int jsonStart = text.IndexOf('[');
                 int jsonEnd = text.LastIndexOf(']');
 
                 if (jsonStart >= 0 && jsonEnd > jsonStart)
                 {
-                    return text.Substring(jsonStart, jsonEnd - jsonStart + 1);
+                    string jsonCandidate = text.Substring(jsonStart, jsonEnd - jsonStart + 1);
+                    // 簡易的な検証（正しいJSONかどうか試行）
+                    try
+                    {
+                        JsonConvert.DeserializeObject(jsonCandidate);
+                        Debug.WriteLine("標準形式のJSONブロックを抽出しました");
+                        return jsonCandidate;
+                    }
+                    catch
+                    {
+                        // JSONとして解析できない場合は次の方法を試す
+                        Debug.WriteLine("標準形式のJSONブロック抽出に失敗、次の方法を試行");
+                    }
                 }
 
                 // コードブロック内のJSONを検索（Markdown形式の場合）
@@ -491,7 +597,17 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     int codeEnd = text.IndexOf(codeBlockEnd, codeStart);
                     if (codeEnd > codeStart)
                     {
-                        return text.Substring(codeStart, codeEnd - codeStart).Trim();
+                        string jsonCandidate = text.Substring(codeStart, codeEnd - codeStart).Trim();
+                        try
+                        {
+                            JsonConvert.DeserializeObject(jsonCandidate);
+                            Debug.WriteLine("JSONコードブロックからJSONを抽出しました");
+                            return jsonCandidate;
+                        }
+                        catch
+                        {
+                            Debug.WriteLine("JSONコードブロックからの抽出に失敗、次の方法を試行");
+                        }
                     }
                 }
 
@@ -506,13 +622,54 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     {
                         string codeContent = text.Substring(codeStart, codeEnd - codeStart).Trim();
                         // JSONのように見えるか確認
-                        if (codeContent.StartsWith("[") && codeContent.EndsWith("]"))
+                        if ((codeContent.StartsWith("[") && codeContent.EndsWith("]")) ||
+                            (codeContent.StartsWith("{") && codeContent.EndsWith("}")))
                         {
-                            return codeContent;
+                            try
+                            {
+                                JsonConvert.DeserializeObject(codeContent);
+                                Debug.WriteLine("一般コードブロックからJSONを抽出しました");
+                                return codeContent;
+                            }
+                            catch
+                            {
+                                Debug.WriteLine("一般コードブロックからの抽出に失敗");
+                            }
                         }
                     }
                 }
 
+                // 最後の手段として、文字列内のJSONらしき部分を探す
+                int bracketStart = text.IndexOf('[');
+                if (bracketStart >= 0)
+                {
+                    // 対応する閉じ括弧を見つける
+                    int bracketCount = 1;
+                    int pos = bracketStart + 1;
+                    while (pos < text.Length && bracketCount > 0)
+                    {
+                        if (text[pos] == '[') bracketCount++;
+                        else if (text[pos] == ']') bracketCount--;
+                        pos++;
+                    }
+
+                    if (bracketCount == 0)
+                    {
+                        string jsonCandidate = text.Substring(bracketStart, pos - bracketStart);
+                        try
+                        {
+                            JsonConvert.DeserializeObject(jsonCandidate);
+                            Debug.WriteLine("テキスト内からJSONらしき部分を抽出しました");
+                            return jsonCandidate;
+                        }
+                        catch
+                        {
+                            Debug.WriteLine("テキスト内のJSON抽出に失敗");
+                        }
+                    }
+                }
+
+                Debug.WriteLine("テキスト内からJSONを抽出できませんでした");
                 return null;
             }
             catch (Exception ex)
@@ -553,6 +710,77 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 Debug.WriteLine($"座標変換中にエラーが発生しました: {ex.Message}");
                 // エラー時はデフォルト値を返す
                 return new Rectangle(0, 0, imageWidth, imageHeight);
+            }
+        }
+
+        /// <summary>
+        /// 画像からテキスト領域を抽出（最適なAIサービスを自動選択）
+        /// </summary>
+        /// <param name="image">テキスト抽出対象の画像</param>
+        /// <param name="isJapaneseText">日本語テキストかどうか</param>
+        /// <returns>検出されたテキスト領域のリスト</returns>
+        public async Task<List<TextRegion>> ExtractTextFromImage(Bitmap image, bool isJapaneseText)
+        {
+            try
+            {
+                List<TextRegion> regions = new List<TextRegion>();
+                Exception primaryException = null;
+
+                // 言語に基づいて最適なAPIを選択
+                try
+                {
+                    if (isJapaneseText)
+                    {
+                        // 日本語テキストの場合はGPT-4 Visionを使用
+                        regions = await ExtractTextWithGpt4Vision(image);
+                    }
+                    else
+                    {
+                        // 英語などのテキストの場合はGemini Pro Visionを使用
+                        regions = await ExtractTextWithGeminiVision(image);
+                    }
+
+                    // 成功した場合はそのまま返す
+                    return regions;
+                }
+                catch (Exception ex)
+                {
+                    // エラーを記録して代替APIを試す
+                    primaryException = ex;
+                    Debug.WriteLine($"プライマリAIサービスでのテキスト抽出に失敗: {ex.Message}");
+                }
+
+                // 代替APIで再試行
+                try
+                {
+                    Debug.WriteLine("代替AIサービスを使用して再試行します...");
+                    if (isJapaneseText)
+                    {
+                        // プライマリが失敗したらGemini Visionを試す
+                        regions = await ExtractTextWithGeminiVision(image);
+                    }
+                    else
+                    {
+                        // プライマリが失敗したらGPT-4 Visionを試す
+                        regions = await ExtractTextWithGpt4Vision(image);
+                    }
+
+                    // 代替APIが成功した場合
+                    Debug.WriteLine("代替AIサービスでのテキスト抽出に成功しました");
+                    return regions;
+                }
+                catch (Exception fallbackEx)
+                {
+                    // 両方のAPIが失敗した場合
+                    Debug.WriteLine($"代替AIサービスでもテキスト抽出に失敗: {fallbackEx.Message}");
+                    throw new AggregateException("すべてのAIサービスでテキスト抽出に失敗しました",
+                        new[] { primaryException, fallbackEx });
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"テキスト抽出中にエラーが発生しました: {ex.Message}");
+                throw;
             }
         }
     }
