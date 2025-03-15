@@ -95,6 +95,7 @@
     <Compile Include="Core\Translation\Interfaces\ITranslationEngine.cs" />
     <Compile Include="Core\Translation\Models\TranslationModels.cs" />
     <Compile Include="Core\Translation\Services\AITranslationEngine.cs" />
+    <Compile Include="Core\Translation\Services\LanguageDetector.cs" />
     <Compile Include="Core\Translation\Services\LanguageManager.cs" />
     <Compile Include="Core\Translation\Services\LibreTranslateEngine.cs" />
     <Compile Include="Core\Translation\Services\TranslationCache.cs" />

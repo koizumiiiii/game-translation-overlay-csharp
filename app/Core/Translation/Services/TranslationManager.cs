@@ -21,6 +21,7 @@ namespace GameTranslationOverlay.Core.Translation.Services
         private TranslationCache _translationCache;
         private bool _isInitialized = false;
         private string _preferredTargetLanguage = "ja"; // デフォルトの翻訳先言語
+        private bool _useAutoDetect = true; // 言語自動検出の有効/無効
 
         public TranslationManager(ITranslationEngine translationEngine)
         {
@@ -50,9 +51,36 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// <returns>翻訳結果</returns>
         public async Task<string> TranslateWithAutoDetectAsync(string text)
         {
-            // 言語を自動検出して翻訳
-            var (sourceLang, targetLang) = LanguageManager.GetOptimalTranslationPair(text, _preferredTargetLanguage);
-            return await TranslateAsync(text, sourceLang, targetLang);
+            if (!_useAutoDetect)
+            {
+                // 自動検出が無効の場合はデフォルト言語ペアを使用
+                var defaultPair = LanguageManager.GetDefaultLanguagePair();
+                return await TranslateAsync(text, defaultPair.sourceLang, defaultPair.targetLang);
+            }
+
+            // 混合言語テキストかどうかをチェック
+            bool isMixed = LanguageManager.IsMixedLanguage(text);
+            string detectedLang;
+
+            if (isMixed)
+            {
+                // 混合言語の場合は主要言語を使用
+                detectedLang = LanguageManager.GetPrimaryLanguage(text);
+                Debug.WriteLine($"TranslateWithAutoDetect: Mixed language detected, using primary language: {detectedLang}");
+            }
+            else
+            {
+                // 通常の検出
+                detectedLang = LanguageManager.DetectLanguage(text);
+                Debug.WriteLine($"TranslateWithAutoDetect: Detected language: {detectedLang}");
+            }
+
+            // 翻訳先言語の決定
+            string targetLang = detectedLang == _preferredTargetLanguage ?
+                (detectedLang == "ja" ? "en" : "ja") : _preferredTargetLanguage;
+
+            Debug.WriteLine($"TranslateWithAutoDetect: Translating from {detectedLang} to {targetLang}");
+            return await TranslateAsync(text, detectedLang, targetLang);
         }
 
         /// <summary>
@@ -86,6 +114,17 @@ namespace GameTranslationOverlay.Core.Translation.Services
 
             try
             {
+                // 言語の再検証（言語コードが正しいことを確認）
+                fromLang = ValidateLanguageCode(fromLang);
+                toLang = ValidateLanguageCode(toLang);
+
+                // 同じ言語の場合はそのまま返す
+                if (fromLang == toLang)
+                {
+                    Debug.WriteLine($"TranslateAsync: Source and target languages are the same ({fromLang}), skipping translation");
+                    return text;
+                }
+
                 // キャッシュから翻訳結果を取得
                 string cachedTranslation = _translationCache.GetTranslation(text, fromLang, toLang);
                 if (cachedTranslation != null)
@@ -127,6 +166,24 @@ namespace GameTranslationOverlay.Core.Translation.Services
         }
 
         /// <summary>
+        /// 言語コードの検証と正規化
+        /// </summary>
+        /// <param name="langCode">検証する言語コード</param>
+        /// <returns>正規化された言語コード</returns>
+        private string ValidateLanguageCode(string langCode)
+        {
+            // サポートされている言語コードか確認
+            if (LanguageManager.SupportedLanguages.Contains(langCode))
+            {
+                return langCode;
+            }
+
+            // サポートされていない場合はデフォルト言語を返す
+            Debug.WriteLine($"ValidateLanguageCode: Unsupported language code '{langCode}', defaulting to 'en'");
+            return "en";
+        }
+
+        /// <summary>
         /// 優先的な翻訳先言語を設定する
         /// </summary>
         /// <param name="languageCode">言語コード</param>
@@ -142,6 +199,34 @@ namespace GameTranslationOverlay.Core.Translation.Services
                 Debug.WriteLine($"TranslationManager: Unsupported language code {languageCode}");
                 throw new ArgumentException($"サポートされていない言語コードです: {languageCode}", nameof(languageCode));
             }
+        }
+
+        /// <summary>
+        /// 現在の優先翻訳先言語を取得
+        /// </summary>
+        /// <returns>言語コード</returns>
+        public string GetPreferredTargetLanguage()
+        {
+            return _preferredTargetLanguage;
+        }
+
+        /// <summary>
+        /// 言語自動検出の有効/無効を設定
+        /// </summary>
+        /// <param name="enable">有効にする場合はtrue</param>
+        public void SetAutoDetect(bool enable)
+        {
+            _useAutoDetect = enable;
+            Debug.WriteLine($"TranslationManager: Auto-detect set to {enable}");
+        }
+
+        /// <summary>
+        /// 言語自動検出が有効かどうかを取得
+        /// </summary>
+        /// <returns>有効の場合はtrue</returns>
+        public bool IsAutoDetectEnabled()
+        {
+            return _useAutoDetect;
         }
 
         /// <summary>
@@ -196,6 +281,15 @@ namespace GameTranslationOverlay.Core.Translation.Services
         {
             _translationCache = new TranslationCache(1000);
             Debug.WriteLine("TranslationManager: Cache cleared");
+        }
+
+        /// <summary>
+        /// キャッシュの統計情報を取得
+        /// </summary>
+        /// <returns>キャッシュサイズ</returns>
+        public int GetCacheSize()
+        {
+            return _translationCache?.Count ?? 0;
         }
     }
 }

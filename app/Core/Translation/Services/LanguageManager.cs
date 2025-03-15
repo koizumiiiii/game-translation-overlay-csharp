@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace GameTranslationOverlay.Core.Translation.Services
 {
@@ -28,23 +29,8 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// <returns>検出された言語コード ("en"または"ja")</returns>
         public static string DetectLanguage(string text)
         {
-            if (string.IsNullOrEmpty(text)) return "en";
-
-            // 日本語文字（ひらがな、カタカナ、漢字）の出現率に基づく簡易判定
-            int japaneseChars = 0;
-
-            foreach (char c in text)
-            {
-                if ((c >= 0x3040 && c <= 0x309F) || // ひらがな
-                    (c >= 0x30A0 && c <= 0x30FF) || // カタカナ
-                    (c >= 0x4E00 && c <= 0x9FFF))   // 漢字
-                {
-                    japaneseChars++;
-                }
-            }
-
-            double japaneseRatio = (double)japaneseChars / text.Length;
-            return japaneseRatio > 0.2 ? "ja" : "en";
+            // 新しいLanguageDetectorクラスを使用して言語を検出
+            return LanguageDetector.DetectLanguage(text);
         }
 
         /// <summary>
@@ -56,10 +42,76 @@ namespace GameTranslationOverlay.Core.Translation.Services
         public static (string sourceLang, string targetLang) GetOptimalTranslationPair(string text, string preferredTargetLang)
         {
             string detectedLang = DetectLanguage(text);
+
+            // 検出言語と希望する翻訳先言語が同じ場合、別の言語へ翻訳
             string targetLang = detectedLang == preferredTargetLang ?
                 (detectedLang == "ja" ? "en" : "ja") : preferredTargetLang;
 
+            // デバッグ出力
+            Debug.WriteLine($"LanguageManager: Detected language: {detectedLang}, Target language: {targetLang}");
+
             return (detectedLang, targetLang);
+        }
+
+        /// <summary>
+        /// テキストが混合言語かどうかを判定する
+        /// </summary>
+        /// <param name="text">検出対象のテキスト</param>
+        /// <returns>混合言語の場合はtrue</returns>
+        public static bool IsMixedLanguage(string text)
+        {
+            bool hasJapanese = LanguageDetector.ContainsJapanese(text);
+            bool hasEnglish = LanguageDetector.ContainsEnglish(text);
+
+            return hasJapanese && hasEnglish;
+        }
+
+        /// <summary>
+        /// 混合言語テキストの場合の主要言語を取得
+        /// </summary>
+        /// <param name="text">検出対象のテキスト</param>
+        /// <returns>主要言語のコード</returns>
+        public static string GetPrimaryLanguage(string text)
+        {
+            if (!IsMixedLanguage(text))
+            {
+                return DetectLanguage(text);
+            }
+
+            // 言語比率を計算
+            var ratios = LanguageDetector.CalculateLanguageRatios(text);
+
+            // より高い比率の言語を返す
+            return ratios["ja"] > ratios["en"] ? "ja" : "en";
+        }
+
+        /// <summary>
+        /// テキストが日本語を含むかチェック
+        /// </summary>
+        /// <param name="text">検出対象のテキスト</param>
+        /// <returns>日本語を含む場合はtrue</returns>
+        public static bool ContainsJapanese(string text)
+        {
+            return LanguageDetector.ContainsJapanese(text);
+        }
+
+        /// <summary>
+        /// テキストが英語を含むかチェック
+        /// </summary>
+        /// <param name="text">検出対象のテキスト</param>
+        /// <returns>英語を含む場合はtrue</returns>
+        public static bool ContainsEnglish(string text)
+        {
+            return LanguageDetector.ContainsEnglish(text);
+        }
+
+        /// <summary>
+        /// デフォルトの言語ペアを取得
+        /// </summary>
+        /// <returns>デフォルトのソース言語と翻訳先言語のペア</returns>
+        public static (string sourceLang, string targetLang) GetDefaultLanguagePair()
+        {
+            return ("en", "ja");
         }
     }
 }
