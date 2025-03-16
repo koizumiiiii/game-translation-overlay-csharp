@@ -428,15 +428,14 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 // 既存のOCRを使用して簡易チェック
                 var regions = await _ocrEngine.DetectTextRegionsAsync(image);
 
-                // テキスト領域数と文字数の両方をチェック
-                int minTextRegions = 3; // 最低3つのテキスト領域
-                int minTotalChars = 30; // 合計30文字以上
+                // 文字数のみでチェック
+                int minTotalChars = 15; // 合計15文字以上
 
                 int totalChars = regions.Sum(r => r.Text?.Length ?? 0);
                 int regionCount = regions.Count;
 
                 Debug.WriteLine($"Text sufficiency check: {regionCount} regions, {totalChars} characters");
-                return regionCount >= minTextRegions && totalChars >= minTotalChars;
+                return totalChars >= minTotalChars;
             }
             catch (Exception ex)
             {

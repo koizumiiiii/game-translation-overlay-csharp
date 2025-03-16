@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using GameTranslationOverlay.Core.Configuration;
+using System.IO;
 using OCRNamespace = GameTranslationOverlay.Core.OCR;
 
 namespace GameTranslationOverlay.Core.Utils
@@ -127,7 +129,70 @@ namespace GameTranslationOverlay.Core.Utils
                 return null;
 
             // ImagePreprocessorに現在のオプションを使用して処理を依頼
-            return ImagePreprocessor.ProcessImage(sourceBitmap, _currentOptions);
+            Bitmap processedImage = ImagePreprocessor.ProcessImage(sourceBitmap, _currentOptions);
+
+            // デバッグ用に前処理後の画像を保存
+            SavePreprocessedImageForDebug(processedImage, _currentPresetIndex);
+
+            return processedImage;
+        }
+
+        // 追加するメソッド
+        public void SavePreprocessedImageForDebug(Bitmap processedImage, int presetIndex)
+        {
+            Debug.WriteLine("SavePreprocessedImageForDebug: 開始");
+
+            // デバッグモードに関わらず、前処理設定の詳細をログに出力
+            Debug.WriteLine($"前処理設定詳細 (プリセット {presetIndex + 1}/{_presets.Count}):");
+            Debug.WriteLine($"  - コントラスト: {_currentOptions.ContrastLevel:F2}");
+            Debug.WriteLine($"  - 明るさ: {_currentOptions.BrightnessLevel:F2}");
+            Debug.WriteLine($"  - シャープネス: {_currentOptions.SharpnessLevel:F2}");
+            Debug.WriteLine($"  - ノイズ除去: {_currentOptions.NoiseReduction}");
+            Debug.WriteLine($"  - 二値化閾値: {_currentOptions.Threshold}");
+            Debug.WriteLine($"  - スケール係数: {_currentOptions.ScaleFactor:F2}");
+            Debug.WriteLine($"  - パディング: {_currentOptions.Padding}px");
+
+            if (AppSettings.Instance.DebugModeEnabled && processedImage != null)
+            {
+                try
+                {
+                    // 一時ディレクトリの代わりにデスクトップを使用（確認しやすいよう）
+                    string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+                    string debugDir = Path.Combine(desktopPath, "GameTranslationOverlay_Debug");
+
+                    // ディレクトリが存在しない場合は作成
+                    if (!Directory.Exists(debugDir))
+                    {
+                        Directory.CreateDirectory(debugDir);
+                    }
+
+                    string fileName = $"debug_preprocess_{presetIndex + 1}_{DateTime.Now.ToString("HHmmss")}.png";
+                    string fullPath = Path.Combine(debugDir, fileName);
+
+                    // 画像を保存
+                    processedImage.Save(fullPath, System.Drawing.Imaging.ImageFormat.Png);
+                    Debug.WriteLine($"前処理画像を保存しました: {fullPath}");
+
+                    // 画像のプロパティもログに出力
+                    Debug.WriteLine($"  - 画像サイズ: {processedImage.Width}x{processedImage.Height}");
+                    Debug.WriteLine($"  - ピクセル形式: {processedImage.PixelFormat}");
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"前処理画像の保存に失敗: {ex.Message}");
+                    Debug.WriteLine($"例外詳細: {ex}");
+                }
+            }
+            else if (processedImage == null)
+            {
+                Debug.WriteLine("前処理画像の保存失敗: 画像がnullです");
+            }
+            else if (!AppSettings.Instance.DebugModeEnabled)
+            {
+                Debug.WriteLine("前処理画像の保存をスキップ: デバッグモードが無効です");
+            }
+
+            Debug.WriteLine("SavePreprocessedImageForDebug: 終了");
         }
 
         /// <summary>
