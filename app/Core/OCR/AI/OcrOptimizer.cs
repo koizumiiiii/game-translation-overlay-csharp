@@ -164,45 +164,19 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 bool isJapaneseText = await DetectJapaneseText(sampleScreen, _ocrEngine);
                 Debug.WriteLine($"Detected language: {(isJapaneseText ? "Japanese" : "Non-Japanese")}");
 
-                // AIを使ってテキスト領域を抽出（「正解」データとして使用）
+                // AIを使ってテキスト領域を抽出（「正解」データとして使用）- 元画像を直接使用
                 List<TextRegion> aiTextRegions = new List<TextRegion>();
                 try
                 {
-                    if (isJapaneseText)
-                    {
-                        // 日本語テキストの場合はGPT-4 Visionを使用
-                        aiTextRegions = await _visionClient.ExtractTextWithGpt4Vision(sampleScreen);
-                    }
-                    else
-                    {
-                        // 英語などのテキストの場合はGemini Pro Visionを使用
-                        aiTextRegions = await _visionClient.ExtractTextWithGeminiVision(sampleScreen);
-                    }
+                    // 前処理なしで直接元画像を使用
+                    aiTextRegions = await _visionClient.ExtractTextFromImage(sampleScreen, isJapaneseText);
+
+                    Debug.WriteLine($"AI detected {aiTextRegions.Count} text regions using original image without preprocessing");
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"プライマリAIでのテキスト抽出エラー: {ex.Message}");
-
-                    // 代替APIを試行
-                    try
-                    {
-                        Debug.WriteLine($"代替AIサービスを使用して再試行します...");
-                        if (isJapaneseText)
-                        {
-                            // 代替としてGemini Visionを使用
-                            aiTextRegions = await _visionClient.ExtractTextWithGeminiVision(sampleScreen);
-                        }
-                        else
-                        {
-                            // 代替としてGPT-4 Visionを使用
-                            aiTextRegions = await _visionClient.ExtractTextWithGpt4Vision(sampleScreen);
-                        }
-                    }
-                    catch (Exception fallbackEx)
-                    {
-                        Debug.WriteLine($"代替AIサービスでもエラー: {fallbackEx.Message}");
-                        throw new InvalidOperationException($"テキスト抽出中にエラーが発生しました: {ex.Message}", ex);
-                    }
+                    Debug.WriteLine($"AI text extraction error: {ex.Message}");
+                    throw new InvalidOperationException($"テキスト抽出中にエラーが発生しました: {ex.Message}", ex);
                 }
 
                 if (aiTextRegions.Count == 0)
@@ -211,50 +185,10 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     throw new InvalidOperationException("AIがテキストを検出できませんでした。別の画面で再試行してください。");
                 }
 
-                Debug.WriteLine($"AI detected {aiTextRegions.Count} text regions");
+                // AI結果に基づいて最適な設定を生成
+                OptimalSettings optimalSettings = await GenerateOptimalSettings(sampleScreen, aiTextRegions);
 
-                // 様々なOCR設定を試す
-                var testSettings = GenerateTestSettings();
-                Dictionary<OptimalSettings, double> settingsScores = new Dictionary<OptimalSettings, double>();
-
-                foreach (var settings in testSettings)
-                {
-                    // 進捗を記録
-                    Debug.WriteLine($"Testing OCR settings: Confidence={settings.ConfidenceThreshold}, " +
-                                    $"Contrast={settings.PreprocessingOptions.ContrastLevel}, " +
-                                    $"Brightness={settings.PreprocessingOptions.BrightnessLevel}, " +
-                                    $"Sharpness={settings.PreprocessingOptions.SharpnessLevel}");
-
-                    // 現在の設定でOCRを実行
-                    if (_ocrEngine is OcrManager ocrManager)
-                    {
-                        ocrManager.SetConfidenceThreshold(settings.ConfidenceThreshold);
-                        // Utils名前空間からOCR名前空間に変換
-                        ocrManager.SetPreprocessingOptions(settings.PreprocessingOptions);
-                        ocrManager.EnablePreprocessing(true);
-                    }
-
-                    // テキスト領域を検出
-                    List<TextRegion> ocrTextRegions = await _ocrEngine.DetectTextRegionsAsync(sampleScreen);
-                    string ocrExtractedText = string.Join(" ", ocrTextRegions.Select(r => r.Text));
-                    string aiExtractedText = string.Join(" ", aiTextRegions.Select(r => r.Text));
-
-                    // OCR結果とAI結果の類似度を計算
-                    double similarity = CalculateTextSimilarity(ocrExtractedText, aiExtractedText);
-                    Debug.WriteLine($"Similarity score: {similarity:F4}");
-
-                    // 設定と評価結果を保存
-                    settingsScores[settings] = similarity;
-                }
-
-                // 最も類似度が高かった設定を取得
-                if (settingsScores.Count == 0)
-                {
-                    Debug.WriteLine("No valid settings found during optimization");
-                    throw new InvalidOperationException("最適化中に有効な設定が見つかりませんでした。");
-                }
-
-                var optimalSettings = settingsScores.OrderByDescending(pair => pair.Value).First().Key;
+                // 最適化結果を保存
                 optimalSettings.IsOptimized = true;
                 optimalSettings.LastOptimized = DateTime.Now;
 
@@ -282,8 +216,7 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 }
 
                 Debug.WriteLine($"Optimized OCR settings for {gameTitle}: " +
-                               $"Confidence={optimalSettings.ConfidenceThreshold}, " +
-                               $"Similarity={settingsScores[optimalSettings]:F4}");
+                               $"Confidence={optimalSettings.ConfidenceThreshold}");
 
                 return optimalSettings;
             }
@@ -428,14 +361,14 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 // 既存のOCRを使用して簡易チェック
                 var regions = await _ocrEngine.DetectTextRegionsAsync(image);
 
-                // 文字数のみでチェック
-                int minTotalChars = 15; // 合計15文字以上
+                // 文字数のみに基づく緩和された条件
+                int minTotalChars = 3; // 最小限の文字数をさらに緩和
 
                 int totalChars = regions.Sum(r => r.Text?.Length ?? 0);
                 int regionCount = regions.Count;
 
                 Debug.WriteLine($"Text sufficiency check: {regionCount} regions, {totalChars} characters");
-                return totalChars >= minTotalChars;
+                return totalChars >= minTotalChars || regionCount >= 2;
             }
             catch (Exception ex)
             {
@@ -835,6 +768,273 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 // 読み込みに失敗した場合は空の状態を維持
                 _optimizationHistory.Clear();
             }
+        }
+
+        /// <summary>
+        // AIが認識した結果に基づいて、最適なOCR設定を生成
+        /// </summary>
+        private async Task<OptimalSettings> GenerateOptimalSettings(Bitmap image, List<TextRegion> aiTextRegions)
+        {
+            // テキスト特性の分析
+            bool hasSmallFont = HasSmallFont(aiTextRegions, image);
+            bool hasLowContrast = HasLowContrast(image);
+            bool hasJapaneseText = ContainsJapaneseText(aiTextRegions);
+            bool hasPixelatedFont = ContainsPixelatedFont(aiTextRegions);
+
+            // 基本設定から開始
+            OptimalSettings settings = new OptimalSettings
+            {
+                ConfidenceThreshold = 0.5f,
+                PreprocessingOptions = new GameTranslationOverlay.Core.Utils.PreprocessingOptions
+                {
+                    ContrastLevel = 1.0f,
+                    BrightnessLevel = 1.0f,
+                    SharpnessLevel = 0.0f,
+                    NoiseReduction = 0,
+                    ScaleFactor = 1.0f,
+                    Threshold = 0,
+                    Padding = 0
+                }
+            };
+
+            // 特性に基づく調整
+            if (hasSmallFont)
+            {
+                // 小さいフォント用の設定
+                settings.PreprocessingOptions.ScaleFactor = 1.5f;
+                settings.ConfidenceThreshold = 0.4f; // 小さいフォントでは閾値を下げる
+                Debug.WriteLine("Detected small font, adjusting scale factor to 1.5 and reducing confidence threshold");
+            }
+
+            if (hasLowContrast)
+            {
+                // 低コントラスト用の設定
+                settings.PreprocessingOptions.ContrastLevel = 1.3f;
+                Debug.WriteLine("Detected low contrast, increasing contrast level to 1.3");
+            }
+
+            if (hasJapaneseText)
+            {
+                // 日本語テキスト用の設定
+                settings.ConfidenceThreshold = Math.Min(settings.ConfidenceThreshold, 0.45f); // 日本語は認識難度が高いので閾値を下げる
+                settings.PreprocessingOptions.SharpnessLevel = 1.0f; // 日本語はシャープネスが役立つことが多い
+                Debug.WriteLine("Optimizing for Japanese text, adjusting confidence threshold and applying sharpness");
+            }
+
+            if (hasPixelatedFont)
+            {
+                // ピクセルフォント用の設定
+                settings.PreprocessingOptions.SharpnessLevel = 0.0f; // シャープネスを抑制
+                settings.PreprocessingOptions.NoiseReduction = 0;    // ノイズ除去を無効化
+                Debug.WriteLine("Detected pixelated font, disabling sharpening and noise reduction");
+            }
+
+            // 様々な設定を試して最適なものを選定
+            Dictionary<OptimalSettings, double> settingsScores = new Dictionary<OptimalSettings, double>();
+            var testSettings = GenerateTestSettings(settings); // 基本設定から派生したテスト設定
+
+            foreach (var testSetting in testSettings)
+            {
+                if (_ocrEngine is OcrManager ocrManager)
+                {
+                    ocrManager.SetConfidenceThreshold(testSetting.ConfidenceThreshold);
+                    ocrManager.SetPreprocessingOptions(testSetting.PreprocessingOptions);
+                    ocrManager.EnablePreprocessing(true);
+                }
+
+                // テキスト領域を検出
+                List<TextRegion> ocrTextRegions = await _ocrEngine.DetectTextRegionsAsync(image);
+                string ocrExtractedText = string.Join(" ", ocrTextRegions.Select(r => r.Text));
+                string aiExtractedText = string.Join(" ", aiTextRegions.Select(r => r.Text));
+
+                // OCR結果とAI結果の類似度を計算
+                double similarity = CalculateTextSimilarity(ocrExtractedText, aiExtractedText);
+                Debug.WriteLine($"Test settings similarity score: {similarity:F4} (Conf={testSetting.ConfidenceThreshold})");
+
+                settingsScores[testSetting] = similarity;
+            }
+
+            // 最適な設定を選択
+            if (settingsScores.Count == 0)
+            {
+                Debug.WriteLine("No valid test settings found, using default optimal settings");
+                return settings;
+            }
+
+            var optimalSetting = settingsScores.OrderByDescending(pair => pair.Value).First().Key;
+            optimalSetting.IsOptimized = true;
+            optimalSetting.LastOptimized = DateTime.Now;
+
+            Debug.WriteLine($"Selected optimal settings with similarity score: {settingsScores[optimalSetting]:F4}");
+            return optimalSetting;
+        }
+
+        /// <summary>
+        /// 小さいフォントかどうかを判定
+        /// </summary>
+        private bool HasSmallFont(List<TextRegion> textRegions, Bitmap image)
+        {
+            if (textRegions == null || textRegions.Count == 0)
+                return false;
+
+            // 文字の高さの平均値を計算
+            double averageHeight = textRegions.Average(r => r.Bounds.Height);
+
+            // イメージの高さに対する相対的な高さとして評価
+            double relativeHeight = averageHeight / (double)image.Height;
+
+            // 小さいフォントの閾値（画像の高さの3%未満を小さいフォントと判断）
+            return averageHeight < 15 || relativeHeight < 0.03;
+        }
+
+        // OcrOptimizer.cs - 新規メソッド: HasLowContrast
+        private bool HasLowContrast(Bitmap image)
+        {
+            try
+            {
+                // シンプルなコントラスト検出のために画像をサンプリング
+                int sampleSize = 20; // 20x20のグリッドでサンプリング
+                int stepX = Math.Max(1, image.Width / sampleSize);
+                int stepY = Math.Max(1, image.Height / sampleSize);
+
+                int minBrightness = 255;
+                int maxBrightness = 0;
+
+                for (int y = 0; y < image.Height; y += stepY)
+                {
+                    for (int x = 0; x < image.Width; x += stepX)
+                    {
+                        Color pixel = image.GetPixel(x, y);
+                        int brightness = (int)(0.299 * pixel.R + 0.587 * pixel.G + 0.114 * pixel.B);
+
+                        minBrightness = Math.Min(minBrightness, brightness);
+                        maxBrightness = Math.Max(maxBrightness, brightness);
+                    }
+                }
+
+                // コントラスト比を計算
+                double contrastRatio = (maxBrightness > 0) ? (double)maxBrightness / Math.Max(1, minBrightness) : 1.0;
+
+                Debug.WriteLine($"Image contrast ratio: {contrastRatio:F2}");
+
+                // コントラスト比が低い場合はtrue
+                return contrastRatio < 4.0;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error detecting contrast: {ex.Message}");
+                return false;
+            }
+        }
+
+        // OcrOptimizer.cs - 新規メソッド: ContainsJapaneseText
+        private bool ContainsJapaneseText(List<TextRegion> textRegions)
+        {
+            if (textRegions == null || textRegions.Count == 0)
+                return false;
+
+            // すべてのテキストを連結
+            string allText = string.Join(" ", textRegions.Select(r => r.Text));
+
+            // IsJapaneseTextDominantメソッドを使用
+            return IsJapaneseTextDominant(allText);
+        }
+
+        // OcrOptimizer.cs - 新規メソッド: ContainsPixelatedFont
+        private bool ContainsPixelatedFont(List<TextRegion> textRegions)
+        {
+            if (textRegions == null || textRegions.Count == 0)
+                return false;
+
+            // ピクセルフォントの特徴：同じ高さの文字領域が多い
+            var heightGroups = textRegions
+                .GroupBy(r => r.Bounds.Height)
+                .OrderByDescending(g => g.Count())
+                .ToList();
+
+            // 同じ高さのグループが支配的で、その高さが比較的小さい場合
+            if (heightGroups.Count > 0)
+            {
+                int dominantHeight = heightGroups[0].Key;
+                int dominantCount = heightGroups[0].Count();
+
+                // グループの割合が50%以上で、高さが20ピクセル未満ならピクセルフォントの可能性が高い
+                if ((double)dominantCount / textRegions.Count >= 0.5 && dominantHeight < 20)
+                {
+                    Debug.WriteLine($"Detected possible pixelated font: {dominantCount} regions with height {dominantHeight}px");
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // OcrOptimizer.cs - 新規メソッド: GenerateTestSettings
+        private List<OptimalSettings> GenerateTestSettings(OptimalSettings baseSettings)
+        {
+            var settings = new List<OptimalSettings>();
+
+            // 基本設定を追加
+            settings.Add(baseSettings);
+
+            // バリエーションの追加（基本設定の周辺）
+            // 信頼度閾値のバリエーション
+            foreach (var confDelta in new[] { -0.1f, 0.1f })
+            {
+                var newConf = Math.Max(0.2f, Math.Min(0.9f, baseSettings.ConfidenceThreshold + confDelta));
+                settings.Add(new OptimalSettings
+                {
+                    ConfidenceThreshold = newConf,
+                    PreprocessingOptions = ClonePreprocessingOptions(baseSettings.PreprocessingOptions),
+                    IsOptimized = false
+                });
+            }
+
+            // コントラストのバリエーション
+            foreach (var contrastDelta in new[] { -0.2f, 0.2f })
+            {
+                var newOptions = ClonePreprocessingOptions(baseSettings.PreprocessingOptions);
+                newOptions.ContrastLevel = Math.Max(0.6f, Math.Min(1.5f, newOptions.ContrastLevel + contrastDelta));
+
+                settings.Add(new OptimalSettings
+                {
+                    ConfidenceThreshold = baseSettings.ConfidenceThreshold,
+                    PreprocessingOptions = newOptions,
+                    IsOptimized = false
+                });
+            }
+
+            // スケーリングのバリエーション
+            foreach (var scaleDelta in new[] { -0.2f, 0.2f })
+            {
+                var newOptions = ClonePreprocessingOptions(baseSettings.PreprocessingOptions);
+                newOptions.ScaleFactor = Math.Max(0.8f, Math.Min(2.0f, newOptions.ScaleFactor + scaleDelta));
+
+                settings.Add(new OptimalSettings
+                {
+                    ConfidenceThreshold = baseSettings.ConfidenceThreshold,
+                    PreprocessingOptions = newOptions,
+                    IsOptimized = false
+                });
+            }
+
+            return settings;
+        }
+
+        // OcrOptimizer.cs - 新規メソッド: ClonePreprocessingOptions
+        private GameTranslationOverlay.Core.Utils.PreprocessingOptions ClonePreprocessingOptions(
+            GameTranslationOverlay.Core.Utils.PreprocessingOptions options)
+        {
+            return new GameTranslationOverlay.Core.Utils.PreprocessingOptions
+            {
+                ContrastLevel = options.ContrastLevel,
+                BrightnessLevel = options.BrightnessLevel,
+                SharpnessLevel = options.SharpnessLevel,
+                NoiseReduction = options.NoiseReduction,
+                ScaleFactor = options.ScaleFactor,
+                Threshold = options.Threshold,
+                Padding = options.Padding
+            };
         }
 
         #endregion

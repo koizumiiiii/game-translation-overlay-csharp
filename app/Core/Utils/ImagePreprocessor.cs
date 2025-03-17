@@ -2,6 +2,7 @@
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using System.IO;
 using System.Diagnostics;
 using OCRNamespace = GameTranslationOverlay.Core.OCR;
 
@@ -53,6 +54,96 @@ namespace GameTranslationOverlay.Core.Utils
             ScaleFactor = 1.0f,
             Padding = 0
         };
+
+        /// <summary>
+        /// 前処理を適用した画像を返します
+        /// </summary>
+        /// <param name="source">元の画像</param>
+        /// <param name="options">前処理オプション</param>
+        /// <returns>処理された画像</returns>
+        public static Bitmap Preprocess(Bitmap source, PreprocessingOptions options)
+        {
+            if (source == null)
+                return null;
+
+            if (options == null)
+                options = new PreprocessingOptions();
+
+            // 元の画像をコピー
+            Bitmap result = new Bitmap(source);
+            SaveDebugImage(result, "before_preprocess");
+
+            // コントラスト調整
+            if (options.ContrastLevel != 1.0f)
+            {
+                result = AdjustContrast(result, options.ContrastLevel);
+                SaveDebugImage(result, "after_contrast");
+            }
+
+            // 明るさ調整
+            if (options.BrightnessLevel != 1.0f)
+            {
+                result = AdjustBrightness(result, options.BrightnessLevel);
+                SaveDebugImage(result, "after_brightness");
+            }
+
+            // シャープネス適用
+            if (options.SharpnessLevel > 0.0f)
+            {
+                result = ApplySharpen(result, options.SharpnessLevel);
+                SaveDebugImage(result, "after_sharpen");
+            }
+
+            // ノイズ除去
+            if (options.NoiseReduction > 0)
+            {
+                result = ReduceNoise(result, options.NoiseReduction);
+                SaveDebugImage(result, "after_noise_reduction");
+            }
+
+            // 二値化
+            if (options.Threshold > 0)
+            {
+                result = ApplyThreshold(result, options.Threshold);
+                SaveDebugImage(result, "after_threshold");
+            }
+
+            // スケーリング
+            if (options.ScaleFactor != 1.0f)
+            {
+                result = Resize(result, options.ScaleFactor);
+                SaveDebugImage(result, "after_resize");
+            }
+
+            // パディング
+            if (options.Padding > 0)
+            {
+                result = AddPadding(result, options.Padding);
+                SaveDebugImage(result, "after_padding");
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// OCR名前空間のPreprocessingOptionsからUtils名前空間のPreprocessingOptionsに変換
+        /// </summary>
+        private static PreprocessingOptions ConvertFromOcrOptions(OCRNamespace.PreprocessingOptions ocrOptions)
+        {
+            if (ocrOptions == null)
+                return new PreprocessingOptions();
+
+            return new PreprocessingOptions
+            {
+                ContrastLevel = ocrOptions.ContrastLevel,
+                BrightnessLevel = ocrOptions.BrightnessLevel,
+                SharpnessLevel = ocrOptions.SharpnessLevel,
+                NoiseReduction = ocrOptions.NoiseReduction,
+                Threshold = ocrOptions.Threshold,
+                ScaleFactor = ocrOptions.ScaleFactor,
+                Padding = ocrOptions.Padding
+            };
+        }
 
         /// <summary>
         /// OCR名前空間のPreprocessingOptionsを使用して画像を処理
@@ -210,6 +301,42 @@ namespace GameTranslationOverlay.Core.Utils
                 Debug.WriteLine($"画像処理エラー (Utils名前空間): {ex.Message}");
                 return SafeCloneImage(source);
             }
+        }
+
+        /// <summary>
+        /// デバッグ用に前処理の各段階の画像を保存
+        /// </summary>
+        private static void SaveDebugImage(Bitmap image, string stage)
+        {
+            try
+            {
+                // AppSettingsなどでデバッグモードが有効な場合のみ保存
+                if (!IsDebugModeEnabled())
+                    return;
+
+                string path = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+                    "GameTranslationOverlay_Debug",
+                    $"debug_{stage}_{DateTime.Now.ToString("HHmmss")}.png");
+
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                image.Save(path, ImageFormat.Png);
+                Debug.WriteLine($"デバッグ画像を保存しました: {path}");
+                Debug.WriteLine($"  - 画像サイズ: {image.Width}x{image.Height}");
+                Debug.WriteLine($"  - ピクセル形式: {image.PixelFormat}");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"デバッグ画像の保存に失敗: {ex.Message}");
+            }
+        }
+
+        // デバッグモードの状態を取得（実際の実装はアプリケーション設定を参照）
+        private static bool IsDebugModeEnabled()
+        {
+            // 設定クラスからデバッグモードの状態を取得
+            // 仮の実装として常にtrueを返す
+            return true;
         }
 
         /// <summary>
