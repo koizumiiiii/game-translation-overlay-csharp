@@ -354,7 +354,7 @@ namespace GameTranslationOverlay.Core.OCR.AI
         /// </summary>
         /// <param name="image">チェックする画像</param>
         /// <returns>十分なテキストがある場合はtrue</returns>
-        public async Task<bool> HasSufficientText(Bitmap image)
+        private async Task<bool> HasSufficientText(Bitmap image)
         {
             try
             {
@@ -362,7 +362,7 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 var regions = await _ocrEngine.DetectTextRegionsAsync(image);
 
                 // 文字数のみに基づく緩和された条件
-                int minTotalChars = 3; // 最小限の文字数をさらに緩和
+                int minTotalChars = 3; // 最小限の文字数チェック（非常に緩和）
 
                 int totalChars = regions.Sum(r => r.Text?.Length ?? 0);
                 int regionCount = regions.Count;
@@ -373,7 +373,6 @@ namespace GameTranslationOverlay.Core.OCR.AI
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error checking text sufficiency: {ex.Message}");
-                // エラーの場合は十分でないと判断
                 return false;
             }
         }

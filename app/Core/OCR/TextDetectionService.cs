@@ -72,6 +72,43 @@ namespace GameTranslationOverlay.Core.OCR
         private DateTime _lastResourceCheckTime = DateTime.MinValue;
         private const int RESOURCE_CHECK_INTERVAL_MS = 10000; // 10秒ごとにリソースチェック
 
+        private string _currentProcessingStatus = "アイドル";
+        private int _progressPercentage = 0;
+
+        /// <summary>
+        /// 現在の処理状態を取得
+        /// </summary>
+        public string CurrentStatus => _currentProcessingStatus;
+
+        /// <summary>
+        /// 進行状況（パーセント）を取得
+        /// </summary>
+        public int ProgressPercentage => _progressPercentage;
+
+        /// <summary>
+        /// 処理状態を更新
+        /// </summary>
+        /// <param name="status">新しい状態</param>
+        /// <param name="progressPercentage">進行状況（0-100）</param>
+        private void UpdateProcessingStatus(string status, int progressPercentage = -1)
+        {
+            _currentProcessingStatus = status;
+            if (progressPercentage >= 0)
+            {
+                _progressPercentage = Math.Min(100, Math.Max(0, progressPercentage));
+            }
+
+            // 処理状態の変更を通知するイベントを追加できます（必要に応じて）
+            // OnProcessingStatusChanged?.Invoke(this, new StatusChangedEventArgs(_currentProcessingStatus, _progressPercentage));
+
+            Debug.WriteLine($"処理状態: {status}, 進行状況: {(_progressPercentage >= 0 ? _progressPercentage + "%" : "不明")}");
+        }
+
+        /// <summary>
+        /// 処理状態変更イベント - 進行状態表示UIとの連携用
+        /// </summary>
+        // public event EventHandler<StatusChangedEventArgs> OnProcessingStatusChanged;
+
         /// <summary>
         /// 翻訳先言語の設定（最適化のため）
         /// </summary>
@@ -270,6 +307,7 @@ namespace GameTranslationOverlay.Core.OCR
             // リソースチェック（定期的）
             if ((DateTime.Now - _lastResourceCheckTime).TotalMilliseconds > RESOURCE_CHECK_INTERVAL_MS)
             {
+                UpdateProcessingStatus("リソースチェック中");
                 ResourceManager.CleanupDeadReferences();
                 _lastResourceCheckTime = DateTime.Now;
             }
@@ -286,6 +324,7 @@ namespace GameTranslationOverlay.Core.OCR
                 {
                     Debug.WriteLine("対象ウィンドウが無効なため、検出をスキップします");
                     _lastErrorMessage = "対象ウィンドウが無効です";
+                    UpdateProcessingStatus("ウィンドウ無効", 0);
                     return;
                 }
 
@@ -297,6 +336,7 @@ namespace GameTranslationOverlay.Core.OCR
                 {
                     Debug.WriteLine("ウィンドウが最小化されているか、サイズが無効です");
                     _lastErrorMessage = "ウィンドウが最小化されています";
+                    UpdateProcessingStatus("ウィンドウサイズ無効", 0);
                     return;
                 }
 
@@ -305,6 +345,7 @@ namespace GameTranslationOverlay.Core.OCR
                 try
                 {
                     // ウィンドウ全体をキャプチャ
+                    UpdateProcessingStatus("画面キャプチャ中", 10);
                     windowCapture = ScreenCapture.CaptureWindow(_targetWindowHandle);
 
                     if (windowCapture == null)
@@ -312,6 +353,7 @@ namespace GameTranslationOverlay.Core.OCR
                         Debug.WriteLine("ウィンドウキャプチャに失敗しました");
                         _lastErrorMessage = "ウィンドウキャプチャに失敗しました";
                         _consecutiveErrors++;
+                        UpdateProcessingStatus("キャプチャ失敗", 0);
                         return;
                     }
 
@@ -322,12 +364,14 @@ namespace GameTranslationOverlay.Core.OCR
                     bool hasChange = true;
                     if (_useDifferenceDetection)
                     {
+                        UpdateProcessingStatus("差分検出中", 20);
                         hasChange = _differenceDetector.HasSignificantChange(windowCapture);
                     }
 
                     // 差分がある場合のみOCR処理を実行
                     if (hasChange)
                     {
+                        UpdateProcessingStatus("テキスト検出中", 30);
                         List<TextRegion> allRegions = new List<TextRegion>();
 
                         // スマート領域検出を使用するかどうかで処理を分岐
@@ -340,6 +384,7 @@ namespace GameTranslationOverlay.Core.OCR
                             if (regionsToProcess.Count == 0 || regionsToProcess.Count == 1 && regionsToProcess[0].Equals(windowRect))
                             {
                                 Debug.WriteLine("アクティブな領域がないため、全画面処理を実行します");
+                                UpdateProcessingStatus("全画面OCR処理中", 40);
                                 var regions = await _ocrEngine.DetectTextRegionsAsync(windowCapture);
 
                                 // 領域マネージャーを更新
@@ -349,8 +394,10 @@ namespace GameTranslationOverlay.Core.OCR
                             else
                             {
                                 Debug.WriteLine($"{regionsToProcess.Count}個のアクティブ領域を処理します");
+                                UpdateProcessingStatus($"{regionsToProcess.Count}個の領域を処理中", 40);
 
                                 // 各アクティブ領域を個別に処理
+                                int processedRegions = 0;
                                 foreach (var region in regionsToProcess)
                                 {
                                     // 領域がウィンドウ内に収まるように調整
@@ -364,6 +411,7 @@ namespace GameTranslationOverlay.Core.OCR
                                     // 有効なサイズかチェック
                                     if (safeRegion.Width <= 0 || safeRegion.Height <= 0)
                                     {
+                                        processedRegions++;
                                         continue;
                                     }
 
@@ -412,6 +460,11 @@ namespace GameTranslationOverlay.Core.OCR
                                             ResourceManager.ReleaseResource(regionBitmap);
                                             regionBitmap = null;
                                         }
+
+                                        // 進捗状況の更新
+                                        processedRegions++;
+                                        int progress = 40 + (processedRegions * 20 / regionsToProcess.Count);
+                                        UpdateProcessingStatus($"領域処理中 ({processedRegions}/{regionsToProcess.Count})", progress);
                                     }
                                 }
 
@@ -422,10 +475,12 @@ namespace GameTranslationOverlay.Core.OCR
                         else
                         {
                             // 従来の方法（全画面処理）
+                            UpdateProcessingStatus("全画面OCR処理中", 40);
                             allRegions = await _ocrEngine.DetectTextRegionsAsync(windowCapture);
                         }
 
                         // 最低信頼度でフィルタリング
+                        UpdateProcessingStatus("テキスト処理中", 60);
                         allRegions = allRegions.Where(r => r.Confidence >= _minimumConfidence).ToList();
 
                         // アダプティブ間隔の更新
@@ -442,10 +497,12 @@ namespace GameTranslationOverlay.Core.OCR
                         // スクリーン座標に変換
                         if (hasRegionsNow)
                         {
+                            UpdateProcessingStatus("テキスト変換中", 70);
                             // テキスト内容の連結（変更検出用）
                             string currentText = string.Join(" ", allRegions.Select(r => r.Text));
 
                             // 言語の検出と最適化
+                            UpdateProcessingStatus("言語検出中", 80);
                             OptimizeForLanguage(allRegions);
 
                             foreach (var region in allRegions)
@@ -464,6 +521,7 @@ namespace GameTranslationOverlay.Core.OCR
                             // テキスト変更検知が有効で、変更があった場合のみ通知
                             if (!_useChangeDetection || textChanged)
                             {
+                                UpdateProcessingStatus("テキスト通知中", 90);
                                 // 検出結果を保存
                                 _detectedRegions = allRegions;
                                 _noRegionsDetectedCount = 0;
@@ -489,6 +547,7 @@ namespace GameTranslationOverlay.Core.OCR
                             else
                             {
                                 Debug.WriteLine("テキストに変更がないため通知をスキップします");
+                                UpdateProcessingStatus("変更なし", 100);
 
                                 // 長時間変化がない場合は間隔を長くする
                                 if (_dynamicIntervalEnabled && (DateTime.Now - _lastTextChangeTime).TotalSeconds > 10)
@@ -501,6 +560,7 @@ namespace GameTranslationOverlay.Core.OCR
                         {
                             // テキスト領域が検出されなかった
                             Debug.WriteLine("テキスト領域は検出されませんでした");
+                            UpdateProcessingStatus("テキストなし", 100);
                             _noRegionsDetectedCount++;
 
                             // しきい値を超えて検出されなかった場合
@@ -523,6 +583,7 @@ namespace GameTranslationOverlay.Core.OCR
                     else
                     {
                         // 差分がない場合の間隔調整
+                        UpdateProcessingStatus("変更なし", 100);
                         if (_dynamicIntervalEnabled)
                         {
                             _adaptiveInterval.UpdateInterval(false, false);
@@ -545,6 +606,7 @@ namespace GameTranslationOverlay.Core.OCR
                 Debug.WriteLine($"テキスト検出エラー: {ex.Message}");
                 _lastErrorMessage = $"検出エラー: {ex.Message}";
                 _consecutiveErrors++;
+                UpdateProcessingStatus($"エラー: {ex.Message}", 0);
 
                 // 連続エラーが多すぎる場合はリカバリーを試みる
                 if (_consecutiveErrors >= MAX_CONSECUTIVE_ERRORS)
@@ -578,6 +640,7 @@ namespace GameTranslationOverlay.Core.OCR
 
                 // 処理完了フラグを解除
                 _processingActive = false;
+                UpdateProcessingStatus("完了", 100);
 
                 // タイマーを再開（オブジェクトが破棄されていない場合のみ）
                 if (!_disposed && _isRunning && _targetWindowHandle != IntPtr.Zero)
