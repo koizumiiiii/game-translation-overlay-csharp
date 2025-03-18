@@ -1,4 +1,3 @@
-// E:\dev\game-translation-overlay-csharp\app\Core\OCR\AI\VisionServiceClient.cs
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -222,14 +221,14 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     model = "gpt-4-vision-preview",
                     messages = new[]
                     {
-                new
-                {
-                    role = "user",
-                    content = new object[]
-                    {
-                        new { type = "text", text = "Extract all visible text from this game screenshot. For each text element, provide the exact text content and its position (x, y, width, height) in the image. Format as JSON with an array of text regions. Be extremely accurate with the text content." },
                         new
                         {
+                            role = "user",
+                            content = new object[]
+                            {
+                                new { type = "text", text = "Extract all visible text from this game screenshot. For each text element, provide the exact text content and its position (x, y, width, height) in the image. Format as JSON with an array of text regions. Be extremely accurate with the text content." },
+                                new
+                            {
                             type = "image_url",
                             image_url = new
                             {
@@ -239,8 +238,8 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     }
                 }
             },
-                    max_tokens = 1500  // トークン数を増やして長いテキストにも対応
-                };
+            max_tokens = 1500  // トークン数を増やして長いテキストにも対応
+        };
 
                 string json = JsonConvert.SerializeObject(requestBody);
                 StringContent content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -273,6 +272,12 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     }
 
                     string responseContent = await response.Content.ReadAsStringAsync();
+
+                    string responseLogPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "GameTranslationOverlay", "Debug", $"gpt4_response_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+                    File.WriteAllText(responseLogPath, responseContent);
+                    Debug.WriteLine($"GPT-4 Vision APIレスポンスを保存しました: {responseLogPath}");
 
                     // レスポンスの長さをログに記録
                     int responseLength = responseContent.Length;
@@ -344,6 +349,19 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 };
 
                 string json = JsonConvert.SerializeObject(requestBody);
+                string debugDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "GameTranslationOverlay", "Debug");
+
+                // ディレクトリが存在することを確認
+                if (!Directory.Exists(debugDir))
+                {
+                    Directory.CreateDirectory(debugDir);
+                }
+
+                string logPath = Path.Combine(debugDir, $"gpt4_request_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+                File.WriteAllText(logPath, json);
+                Debug.WriteLine($"GPT-4 Vision APIリクエストを保存しました: {logPath}");
                 StringContent content = new StringContent(json, Encoding.UTF8, "application/json");
 
                 string apiUrlWithKey = $"{GEMINI_API_URL}?key={apiKey}";
@@ -375,6 +393,10 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     }
 
                     string responseContent = await response.Content.ReadAsStringAsync();
+
+                    string responseLogPath = Path.Combine(debugDir, $"gpt4_response_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+                    File.WriteAllText(responseLogPath, responseContent);
+                    Debug.WriteLine($"GPT-4 Vision APIレスポンスを保存しました: {responseLogPath}");
 
                     // レスポンスの長さをログに記録
                     int responseLength = responseContent.Length;

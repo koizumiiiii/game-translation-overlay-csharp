@@ -168,6 +168,21 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 List<TextRegion> aiTextRegions = new List<TextRegion>();
                 try
                 {
+                    // AI処理を行う前に画像を保存
+                    string debugDir = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "GameTranslationOverlay", "Debug");
+
+                    // ディレクトリが存在することを確認
+                    if (!Directory.Exists(debugDir))
+                    {
+                        Directory.CreateDirectory(debugDir);
+                    }
+
+                    string imagePath = Path.Combine(debugDir, $"ai_input_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+                    sampleScreen.Save(imagePath, System.Drawing.Imaging.ImageFormat.Png);
+                    Debug.WriteLine($"AI入力画像を保存しました: {imagePath}");
+
                     // 前処理なしで直接元画像を使用
                     aiTextRegions = await _visionClient.ExtractTextFromImage(sampleScreen, isJapaneseText);
 
@@ -359,21 +374,29 @@ namespace GameTranslationOverlay.Core.OCR.AI
             try
             {
                 // 既存のOCRを使用して簡易チェック
+                Debug.WriteLine("HasSufficientText: OCR処理を開始");
                 var regions = await _ocrEngine.DetectTextRegionsAsync(image);
-
-                // 文字数のみに基づく緩和された条件
-                int minTotalChars = 3; // 最小限の文字数チェック（非常に緩和）
 
                 int totalChars = regions.Sum(r => r.Text?.Length ?? 0);
                 int regionCount = regions.Count;
 
                 Debug.WriteLine($"Text sufficiency check: {regionCount} regions, {totalChars} characters");
-                return totalChars >= minTotalChars || regionCount >= 2;
+
+                // 各テキスト領域の内容をログに出力
+                for (int i = 0; i < regions.Count; i++)
+                {
+                    Debug.WriteLine($"領域{i + 1}: \"{regions[i].Text}\" (信頼度: {regions[i].Confidence})");
+                }
+
+                // テキスト検出条件を常に満たすように修正
+                bool result = true; // 常にtrueを返す
+                Debug.WriteLine($"HasSufficientText: 結果 = {result} (条件無視して常に成功)");
+                return result;
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error checking text sufficiency: {ex.Message}");
-                return false;
+                return true; // エラー時も最適化を試みる
             }
         }
 
