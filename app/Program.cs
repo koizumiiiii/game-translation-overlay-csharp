@@ -15,9 +15,6 @@ namespace GameTranslationOverlay
         // グローバルな例外ハンドラー用のイベント
         public static event EventHandler<UnhandledExceptionEventArgs> UnhandledException;
 
-        // アプリケーション終了時の処理用のイベント
-        public static event EventHandler ApplicationExit;
-
         // クラッシュログ用のパス
         private static readonly string CrashLogPath = System.IO.Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
