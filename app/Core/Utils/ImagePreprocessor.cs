@@ -827,6 +827,9 @@ namespace GameTranslationOverlay.Core.Utils
 
             try
             {
+                // スケール係数を1.1までに制限
+                scale = Math.Min(scale, 1.1f);
+                
                 int newWidth = (int)(image.Width * scale);
                 int newHeight = (int)(image.Height * scale);
 

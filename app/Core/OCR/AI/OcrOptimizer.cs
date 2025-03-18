@@ -318,9 +318,19 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 {
                     manager.SetConfidenceThreshold(settings.ConfidenceThreshold);
                     manager.SetPreprocessingOptions(settings.PreprocessingOptions);
-                    manager.EnablePreprocessing(true);
 
-                    Debug.WriteLine($"Applied optimized settings for {gameTitle}");
+                    // AiSuggestionsを確認し、前処理を有効/無効に設定
+                    bool useOriginalImage = false;
+                    if (settings.AiSuggestions != null &&
+                        settings.AiSuggestions.TryGetValue("UseOriginalImage", out var val) &&
+                        val is bool boolVal && boolVal)
+                    {
+                        useOriginalImage = true;
+                    }
+
+                    manager.EnablePreprocessing(!useOriginalImage);
+
+                    Debug.WriteLine($"Applied optimized settings for {gameTitle} (Preprocessing: {(!useOriginalImage ? "Enabled" : "Disabled")})");
                     return true;
                 }
             }
@@ -374,27 +384,28 @@ namespace GameTranslationOverlay.Core.OCR.AI
             try
             {
                 // 既存のOCRを使用して簡易チェック
-                Debug.WriteLine("HasSufficientText: OCR処理を開始");
+                Logger.Instance.LogDebug("OcrOptimizer", "HasSufficientText: OCR処理を開始");
                 var regions = await _ocrEngine.DetectTextRegionsAsync(image);
 
                 int totalChars = regions.Sum(r => r.Text?.Length ?? 0);
                 int regionCount = regions.Count;
 
-                Debug.WriteLine($"Text sufficiency check: {regionCount} regions, {totalChars} characters");
+                Logger.Instance.LogDebug("OcrOptimizer", $"Text sufficiency check: {regionCount} regions, {totalChars} characters");
 
                 // 各テキスト領域の内容をログに出力
                 for (int i = 0; i < regions.Count; i++)
                 {
-                    Debug.WriteLine($"領域{i + 1}: \"{regions[i].Text}\" (信頼度: {regions[i].Confidence})");
+                    Logger.Instance.LogDebug("OcrOptimizer", $"領域{i + 1}: \"{regions[i].Text}\" (信頼度: {regions[i].Confidence})");
                 }
 
                 // テキスト検出条件を常に満たすように修正
                 bool result = true; // 常にtrueを返す
-                Debug.WriteLine($"HasSufficientText: 結果 = {result} (条件無視して常に成功)");
+                Logger.Instance.LogDebug("OcrOptimizer", $"HasSufficientText: 結果 = {result} (条件無視して常に成功)");
                 return result;
             }
             catch (Exception ex)
             {
+                Logger.Instance.LogError($"テキスト十分性チェックでエラーが発生しました: {ex.Message}", ex);
                 Debug.WriteLine($"Error checking text sufficiency: {ex.Message}");
                 return true; // エラー時も最適化を試みる
             }
@@ -806,7 +817,7 @@ namespace GameTranslationOverlay.Core.OCR.AI
             // 基本設定から開始
             OptimalSettings settings = new OptimalSettings
             {
-                ConfidenceThreshold = 0.5f,
+                ConfidenceThreshold = 0.4f, // 下げて検出率を向上
                 PreprocessingOptions = new GameTranslationOverlay.Core.Utils.PreprocessingOptions
                 {
                     ContrastLevel = 1.0f,
@@ -824,23 +835,25 @@ namespace GameTranslationOverlay.Core.OCR.AI
             {
                 // 小さいフォント用の設定
                 settings.PreprocessingOptions.ScaleFactor = 1.5f;
-                settings.ConfidenceThreshold = 0.4f; // 小さいフォントでは閾値を下げる
-                Debug.WriteLine("Detected small font, adjusting scale factor to 1.5 and reducing confidence threshold");
+                settings.ConfidenceThreshold = 0.3f; // さらに閾値を下げる
+                Debug.WriteLine("Detected small font, adjusting scale factor to 1.5 and reducing confidence threshold to 0.3");
             }
 
             if (hasLowContrast)
             {
                 // 低コントラスト用の設定
-                settings.PreprocessingOptions.ContrastLevel = 1.3f;
-                Debug.WriteLine("Detected low contrast, increasing contrast level to 1.3");
+                settings.PreprocessingOptions.ContrastLevel = 1.4f; // より強いコントラスト
+                Debug.WriteLine("Detected low contrast, increasing contrast level to 1.4");
             }
 
             if (hasJapaneseText)
             {
                 // 日本語テキスト用の設定
-                settings.ConfidenceThreshold = Math.Min(settings.ConfidenceThreshold, 0.45f); // 日本語は認識難度が高いので閾値を下げる
-                settings.PreprocessingOptions.SharpnessLevel = 1.0f; // 日本語はシャープネスが役立つことが多い
-                Debug.WriteLine("Optimizing for Japanese text, adjusting confidence threshold and applying sharpness");
+                settings.ConfidenceThreshold = 0.3f; // 日本語は認識難度が高いので閾値を下げる
+                                                     // 日本語の場合は画像前処理のカスタマイズ
+                settings.PreprocessingOptions.SharpnessLevel = hasPixelatedFont ? 0.0f : 1.0f;
+                settings.PreprocessingOptions.ScaleFactor = Math.Max(settings.PreprocessingOptions.ScaleFactor, 1.2f);
+                Debug.WriteLine("Optimizing for Japanese text with specialized settings");
             }
 
             if (hasPixelatedFont)
@@ -848,20 +861,58 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 // ピクセルフォント用の設定
                 settings.PreprocessingOptions.SharpnessLevel = 0.0f; // シャープネスを抑制
                 settings.PreprocessingOptions.NoiseReduction = 0;    // ノイズ除去を無効化
-                Debug.WriteLine("Detected pixelated font, disabling sharpening and noise reduction");
+                settings.ConfidenceThreshold = 0.25f;  // 大幅に閾値を下げる
+                Debug.WriteLine("Detected pixelated font, using specialized settings");
             }
+
+            // AIの結果をそのまま使用するモードのテスト（前処理なし）
+            var noPreprocessSettings = new OptimalSettings
+            {
+                ConfidenceThreshold = 0.3f,
+                PreprocessingOptions = new GameTranslationOverlay.Core.Utils.PreprocessingOptions
+                {
+                    ContrastLevel = 1.0f,
+                    BrightnessLevel = 1.0f,
+                    SharpnessLevel = 0.0f,
+                    NoiseReduction = 0,
+                    ScaleFactor = 1.0f,
+                    Threshold = 0,
+                    Padding = 0
+                },
+                IsOptimized = true,
+                AiSuggestions = new Dictionary<string, object>
+        {
+            { "UseOriginalImage", true }
+        }
+            };
 
             // 様々な設定を試して最適なものを選定
             Dictionary<OptimalSettings, double> settingsScores = new Dictionary<OptimalSettings, double>();
             var testSettings = GenerateTestSettings(settings); // 基本設定から派生したテスト設定
+
+            // 前処理なしの設定を追加
+            testSettings.Add(noPreprocessSettings);
 
             foreach (var testSetting in testSettings)
             {
                 if (_ocrEngine is OcrManager ocrManager)
                 {
                     ocrManager.SetConfidenceThreshold(testSetting.ConfidenceThreshold);
+
+                    // 前処理設定の適用
                     ocrManager.SetPreprocessingOptions(testSetting.PreprocessingOptions);
-                    ocrManager.EnablePreprocessing(true);
+
+                    // AiSuggestionsに特別な指示がある場合は処理
+                    bool useOriginalImage = false;
+                    if (testSetting.AiSuggestions != null &&
+                        testSetting.AiSuggestions.TryGetValue("UseOriginalImage", out var val) &&
+                        val is bool boolVal && boolVal)
+                    {
+                        useOriginalImage = true;
+                    }
+
+                    // 前処理の有効/無効を設定
+                    ocrManager.EnablePreprocessing(!useOriginalImage);
                 }
 
                 // テキスト領域を検出
@@ -871,7 +922,17 @@ namespace GameTranslationOverlay.Core.OCR.AI
 
                 // OCR結果とAI結果の類似度を計算
                 double similarity = CalculateTextSimilarity(ocrExtractedText, aiExtractedText);
-                Debug.WriteLine($"Test settings similarity score: {similarity:F4} (Conf={testSetting.ConfidenceThreshold})");
+
+                // 現在のテスト設定が元画像を使用しているかどうかを確認
+                bool currentUseOriginalImage = false;
+                if (testSetting.AiSuggestions != null &&
+                    testSetting.AiSuggestions.TryGetValue("UseOriginalImage", out var origVal) &&
+                    origVal is bool origBoolVal && origBoolVal)
+                {
+                    currentUseOriginalImage = true;
+                }
+
+                Debug.WriteLine($"Test settings similarity score: {similarity:F4} (Conf={testSetting.ConfidenceThreshold}, Preprocess={(currentUseOriginalImage ? "None" : "Applied")})");
 
                 settingsScores[testSetting] = similarity;
             }
@@ -888,6 +949,21 @@ namespace GameTranslationOverlay.Core.OCR.AI
             optimalSetting.LastOptimized = DateTime.Now;
 
             Debug.WriteLine($"Selected optimal settings with similarity score: {settingsScores[optimalSetting]:F4}");
+
+            // 前処理を使用しない場合はAiSuggestionsに保存
+            bool selectedOriginalImage = false;
+            if (optimalSetting.AiSuggestions != null &&
+                optimalSetting.AiSuggestions.TryGetValue("UseOriginalImage", out var orig) &&
+                orig is bool origBool && origBool)
+            {
+                selectedOriginalImage = true;
+            }
+
+            if (selectedOriginalImage)
+            {
+                Debug.WriteLine("Best result was achieved without preprocessing - will use original images directly");
+            }
+
             return optimalSetting;
         }
 

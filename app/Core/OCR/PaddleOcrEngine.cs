@@ -123,19 +123,34 @@ namespace GameTranslationOverlay.Core.OCR
 
         public async Task<List<TextRegion>> DetectTextRegionsAsync(Bitmap image)
         {
-            if (_paddleOcr == null)
-            {
-                throw new InvalidOperationException("PaddleOCR engine is not initialized");
-            }
+        if (_paddleOcr == null)
+        {
+        throw new InvalidOperationException("PaddleOCR engine is not initialized");
+        }
 
-            return await Task.Run(() =>
-            {
-                try
+        return await Task.Run(() =>
+        {
+        try
+        {
+        Bitmap processedImage = image;
+
+        // 画像サイズの制限チェック
+        if (image.Width > 2500 || image.Height > 1100)
                 {
-                    Bitmap processedImage = image;
+                    Debug.WriteLine($"大きな画像サイズを検出: {image.Width}x{image.Height} - リサイズを適用します");
+                    float scale = Math.Min(2500f / image.Width, 1100f / image.Height);
+                    using (Bitmap resized = new Bitmap((int)(image.Width * scale), (int)(image.Height * scale)))
+                    {
+                        using (Graphics g = Graphics.FromImage(resized))
+                        {
+                            g.DrawImage(image, 0, 0, resized.Width, resized.Height);
+                        }
+                        processedImage = resized;
+                    }
+                }
 
-                    var result = _paddleOcr.DetectText(processedImage);
-                    List<TextRegion> textRegions = new List<TextRegion>();
+                var result = _paddleOcr.DetectText(processedImage);
+                List<TextRegion> textRegions = new List<TextRegion>();
 
                     if (result != null)
                     {

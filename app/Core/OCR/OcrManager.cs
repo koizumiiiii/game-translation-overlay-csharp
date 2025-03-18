@@ -711,10 +711,25 @@ namespace GameTranslationOverlay.Core.OCR
             {
                 if (disposing)
                 {
-                    // マネージドリソースの破棄
-                    _paddleOcrEngine?.Dispose();
-                    _ocrCache.Clear();
-                    _processingTimes.Clear();
+                    try
+                    {
+                        // マネージドリソースの破棄
+                        if (_paddleOcrEngine != null)
+                        {
+                            _paddleOcrEngine.Dispose();
+                            _paddleOcrEngine = null;
+                            GC.Collect(); // 明示的なGC呼び出し
+                            GC.WaitForPendingFinalizers();
+                        }
+                        
+                        // キャッシュのクリア
+                        _ocrCache.Clear();
+                        _processingTimes.Clear();
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"OcrManager破棄中のエラー: {ex.Message}");
+                    }
                 }
 
                 _isDisposed = true;
