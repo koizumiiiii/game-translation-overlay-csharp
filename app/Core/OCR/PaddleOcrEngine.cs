@@ -9,11 +9,22 @@ using System.Collections.Generic;
 
 namespace GameTranslationOverlay.Core.OCR
 {
-    public class PaddleOcrEngine : IOcrEngine
+    public class PaddleOcrEngine : IOcrEngine, IDisposable
     {
         private PaddleOCREngine _paddleOcr;
         private OCRModelConfig _modelConfig;
         private bool _enablePreprocessing = false;
+        private PreprocessingOptions _preprocessingOptions;
+        private bool _isDisposed = false;
+
+        // 最大画像サイズの制限
+        private const int MAX_IMAGE_DIMENSION = 1920;
+
+        // プロパティの追加
+        public void SetPreprocessingOptions(PreprocessingOptions options)
+        {
+            _preprocessingOptions = options;
+        }
 
         public PaddleOcrEngine()
         {
@@ -123,35 +134,75 @@ namespace GameTranslationOverlay.Core.OCR
 
         public async Task<List<TextRegion>> DetectTextRegionsAsync(Bitmap image)
         {
-        if (_paddleOcr == null)
-        {
-        throw new InvalidOperationException("PaddleOCR engine is not initialized");
-        }
+            if (_paddleOcr == null)
+            {
+                throw new InvalidOperationException("PaddleOCR engine is not initialized");
+            }
 
-        return await Task.Run(() =>
-        {
-        try
-        {
-        Bitmap processedImage = image;
+            if (_isDisposed)
+            {
+                throw new ObjectDisposedException(nameof(PaddleOcrEngine));
+            }
 
-        // 画像サイズの制限チェック
-        if (image.Width > 2500 || image.Height > 1100)
-                {
-                    Debug.WriteLine($"大きな画像サイズを検出: {image.Width}x{image.Height} - リサイズを適用します");
-                    float scale = Math.Min(2500f / image.Width, 1100f / image.Height);
-                    using (Bitmap resized = new Bitmap((int)(image.Width * scale), (int)(image.Height * scale)))
-                    {
-                        using (Graphics g = Graphics.FromImage(resized))
-                        {
-                            g.DrawImage(image, 0, 0, resized.Width, resized.Height);
-                        }
-                        processedImage = resized;
-                    }
-                }
-
-                var result = _paddleOcr.DetectText(processedImage);
+            return await Task.Run(() =>
+            {
+                // 処理結果を格納する変数
                 List<TextRegion> textRegions = new List<TextRegion>();
+                // 処理中の画像を格納する変数
+                Bitmap processedImage = null;
 
+                try
+                {
+                    // メモリ使用量をログに記録（デバッグ用）
+                    Debug.WriteLine($"メモリ使用量: {GC.GetTotalMemory(false) / (1024 * 1024)}MB");
+
+                    // 画像サイズをチェックし、必要に応じてリサイズ
+                    if (image.Width > MAX_IMAGE_DIMENSION || image.Height > MAX_IMAGE_DIMENSION)
+                    {
+                        Debug.WriteLine($"大きな画像サイズを検出: {image.Width}x{image.Height} - リサイズを適用します");
+
+                        // リサイズ比率の計算（最大次元に基づく）
+                        float scale = (float)MAX_IMAGE_DIMENSION / Math.Max(image.Width, image.Height);
+                        int newWidth = (int)(image.Width * scale);
+                        int newHeight = (int)(image.Height * scale);
+
+                        Debug.WriteLine($"リサイズ後のサイズ: {newWidth}x{newHeight}");
+
+                        // 新しいビットマップの作成
+                        processedImage = new Bitmap(newWidth, newHeight);
+
+                        using (Graphics g = Graphics.FromImage(processedImage))
+                        {
+                            // 高品質リサイズ設定
+                            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                            g.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
+
+                            // 画像の描画
+                            g.DrawImage(image, 0, 0, newWidth, newHeight);
+                        }
+                    }
+                    else
+                    {
+                        // サイズが十分小さい場合は元の画像を使用（コピーして安全に）
+                        processedImage = new Bitmap(image);
+                    }
+
+                    // 前処理の適用
+                    if (_enablePreprocessing && _preprocessingOptions != null)
+                    {
+                        Bitmap preprocessedImage = ApplyPreprocessing(processedImage, _preprocessingOptions);
+                        // 古い画像を解放
+                        processedImage.Dispose();
+                        // 前処理後の画像を使用
+                        processedImage = preprocessedImage;
+                    }
+
+                    // OCR検出処理
+                    var result = _paddleOcr.DetectText(processedImage);
+
+                    // TextRegionへの変換処理
                     if (result != null)
                     {
                         // リフレクションを使用してBoxesプロパティにアクセス
@@ -163,7 +214,7 @@ namespace GameTranslationOverlay.Core.OCR
                             {
                                 foreach (var box in boxes)
                                 {
-                                    // ボックスオブジェクトからプロパティを取得
+                                    // 既存のリフレクションコード...
                                     var textProperty = box.GetType().GetProperty("Text");
                                     var scoreProperty = box.GetType().GetProperty("Score");
                                     var boxPointsProperty = box.GetType().GetProperty("BoxPoints");
@@ -225,7 +276,137 @@ namespace GameTranslationOverlay.Core.OCR
                     Debug.WriteLine($"Error in text region detection: {ex.Message}");
                     return new List<TextRegion>();
                 }
+                finally
+                {
+                    // リソースの解放
+                    processedImage?.Dispose();
+                }
             });
+        }
+
+        // 前処理を適用するメソッド
+        private Bitmap ApplyPreprocessing(Bitmap image, PreprocessingOptions options)
+        {
+            // 入力検証
+            if (image == null || options == null)
+                return image;
+
+            // 前処理後の画像
+            Bitmap result = new Bitmap(image);
+
+            try
+            {
+                // コントラスト調整
+                if (options.ContrastLevel != 1.0f)
+                {
+                    result = AdjustContrast(result, options.ContrastLevel);
+                }
+
+                // 明るさ調整
+                if (options.BrightnessLevel != 1.0f)
+                {
+                    result = AdjustBrightness(result, options.BrightnessLevel);
+                }
+
+                // シャープネス
+                if (options.SharpnessLevel > 0.0f)
+                {
+                    result = ApplySharpen(result, options.SharpnessLevel);
+                }
+
+                // ノイズ除去
+                if (options.NoiseReduction > 0)
+                {
+                    result = ApplyNoiseReduction(result, options.NoiseReduction);
+                }
+
+                // サイズ調整
+                if (options.ScaleFactor != 1.0f)
+                {
+                    result = ResizeImage(result, options.ScaleFactor);
+                }
+
+                // パディング
+                if (options.Padding > 0)
+                {
+                    // 大きな画像の場合はパディングを制限
+                    int padding = options.Padding;
+                    if (result.Width > MAX_IMAGE_DIMENSION - 100 || result.Height > MAX_IMAGE_DIMENSION - 100)
+                    {
+                        padding = Math.Min(padding, 2); // 最大2pxまで制限
+                        Debug.WriteLine($"大きな画像のためパディングを制限: {options.Padding}→{padding}");
+                    }
+                    result = AddPadding(result, padding);
+                }
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"画像前処理でエラー: {ex.Message}");
+                // エラーが発生した場合は元の画像を返す
+                return image;
+            }
+        }
+
+        // 前処理メソッドの実装（基本的な例）
+        private Bitmap AdjustContrast(Bitmap image, float level)
+        {
+            // 実装例（簡略化）
+            // 実際の実装ではより高度な画像処理アルゴリズムを使用
+            return image;
+        }
+
+        private Bitmap AdjustBrightness(Bitmap image, float level)
+        {
+            // 同様に実装
+            return image;
+        }
+
+        private Bitmap ApplySharpen(Bitmap image, float strength)
+        {
+            // 同様に実装
+            return image;
+        }
+
+        private Bitmap ApplyNoiseReduction(Bitmap image, int level)
+        {
+            // 同様に実装
+            return image;
+        }
+
+        private Bitmap ResizeImage(Bitmap image, float scale)
+        {
+            // すでにリサイズロジックがあるが、前処理用に再利用
+            int newWidth = (int)(image.Width * scale);
+            int newHeight = (int)(image.Height * scale);
+
+            Bitmap resized = new Bitmap(newWidth, newHeight);
+            using (Graphics g = Graphics.FromImage(resized))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.DrawImage(image, 0, 0, newWidth, newHeight);
+            }
+
+            return resized;
+        }
+
+        private Bitmap AddPadding(Bitmap image, int padding)
+        {
+            if (padding <= 0)
+                return image;
+
+            int newWidth = image.Width + (padding * 2);
+            int newHeight = image.Height + (padding * 2);
+
+            Bitmap paddedImage = new Bitmap(newWidth, newHeight);
+            using (Graphics g = Graphics.FromImage(paddedImage))
+            {
+                g.Clear(Color.White); // 白い背景で埋める
+                g.DrawImage(image, padding, padding, image.Width, image.Height);
+            }
+
+            return paddedImage;
         }
 
         public void EnablePreprocessing(bool enable)
@@ -287,7 +468,11 @@ namespace GameTranslationOverlay.Core.OCR
 
         public void Dispose()
         {
-            _paddleOcr?.Dispose();
+            if (!_isDisposed)
+            {
+                _paddleOcr?.Dispose();
+                _isDisposed = true;
+            }
         }
     }
 }
