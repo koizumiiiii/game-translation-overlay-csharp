@@ -15,9 +15,10 @@ using static GameTranslationOverlay.Core.Licensing.LicenseManager;
 
 namespace GameTranslationOverlay.Core.Translation.Services
 {
-    public class AITranslationEngine : ITranslationEngine
+    public class AITranslationEngine : ITranslationEngine, IDisposable
     {
-        private readonly HttpClient _httpClient;
+        private HttpClient _httpClient;
+        private bool _isDisposed = false;
         private readonly int _maxTokensPerRequest = 100;
         private int _remainingTokens;
         private readonly ITranslationEngine _fallbackEngine;
@@ -149,11 +150,48 @@ namespace GameTranslationOverlay.Core.Translation.Services
             }
         }
 
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_isDisposed)
+            {
+                if (disposing)
+                {
+                    try
+                    {
+                        _httpClient?.Dispose();
+                        _httpClient = null;
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"LibreTranslateEngine: リソース解放中にエラーが発生しました: {ex.Message}");
+                    }
+                }
+
+                _isDisposed = true;
+            }
+        }
+
+        // 各メソッドの先頭に破棄済みチェックを追加
+        private void CheckDisposed()
+        {
+            if (_isDisposed)
+            {
+                throw new ObjectDisposedException(nameof(LibreTranslateEngine));
+            }
+        }
+
         /// <summary>
         /// テキストを翻訳する
         /// </summary>
         public async Task<string> TranslateAsync(string text, string fromLang, string toLang)
         {
+            CheckDisposed();
             if (!_isInitialized)
             {
                 try

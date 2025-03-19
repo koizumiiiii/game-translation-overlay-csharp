@@ -761,9 +761,13 @@ namespace GameTranslationOverlay
                     _overlayForm = null;
                 }
 
-                // 2. 翻訳マネージャーのクリーンアップ
-                // TranslationManagerがIDisposableを実装していないためDispose呼び出しは行わない
-                _translationManager = null;
+                // 2. 翻訳マネージャーの破棄 - IDisposable 実装後に追加
+                if (_translationManager != null)
+                {
+                    Debug.WriteLine("翻訳マネージャーを破棄しています...");
+                    _translationManager.Dispose();
+                    _translationManager = null;
+                }
 
                 // 3. OCRマネージャーを破棄
                 if (_ocrManager != null)

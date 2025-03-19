@@ -15,13 +15,14 @@ namespace GameTranslationOverlay.Core.Translation.Services
         AI
     }
 
-    public class TranslationManager
+    public class TranslationManager : IDisposable
     {
         private ITranslationEngine _translationEngine;
         private TranslationCache _translationCache;
         private bool _isInitialized = false;
         private string _preferredTargetLanguage = "ja"; // デフォルトの翻訳先言語
         private bool _useAutoDetect = true; // 言語自動検出の有効/無効
+        private bool _isDisposed = false;
 
         public TranslationManager(ITranslationEngine translationEngine)
         {
@@ -31,6 +32,8 @@ namespace GameTranslationOverlay.Core.Translation.Services
 
         public async Task InitializeAsync()
         {
+            CheckDisposed();
+
             try
             {
                 await _translationEngine.InitializeAsync();
@@ -51,6 +54,8 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// <returns>翻訳結果</returns>
         public async Task<string> TranslateWithAutoDetectAsync(string text)
         {
+            CheckDisposed();
+
             if (!_useAutoDetect)
             {
                 // 自動検出が無効の場合はデフォルト言語ペアを使用
@@ -92,6 +97,8 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// <returns>翻訳結果</returns>
         public async Task<string> TranslateAsync(string text, string fromLang, string toLang)
         {
+            CheckDisposed();
+
             if (string.IsNullOrWhiteSpace(text))
             {
                 Debug.WriteLine("TranslateAsync: Empty text provided");
@@ -189,6 +196,8 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// <param name="languageCode">言語コード</param>
         public void SetPreferredTargetLanguage(string languageCode)
         {
+            CheckDisposed();
+
             if (LanguageManager.SupportedLanguages.Contains(languageCode))
             {
                 _preferredTargetLanguage = languageCode;
@@ -207,6 +216,7 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// <returns>言語コード</returns>
         public string GetPreferredTargetLanguage()
         {
+            CheckDisposed();
             return _preferredTargetLanguage;
         }
 
@@ -216,6 +226,7 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// <param name="enable">有効にする場合はtrue</param>
         public void SetAutoDetect(bool enable)
         {
+            CheckDisposed();
             _useAutoDetect = enable;
             Debug.WriteLine($"TranslationManager: Auto-detect set to {enable}");
         }
@@ -226,6 +237,7 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// <returns>有効の場合はtrue</returns>
         public bool IsAutoDetectEnabled()
         {
+            CheckDisposed();
             return _useAutoDetect;
         }
 
@@ -235,6 +247,22 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// <param name="engine">使用する翻訳エンジン</param>
         public void SetTranslationEngine(ITranslationEngine engine)
         {
+            CheckDisposed();
+
+            // 既存のエンジンが IDisposable を実装している場合は解放
+            if (_translationEngine is IDisposable disposableEngine)
+            {
+                try
+                {
+                    Debug.WriteLine("TranslationManager: 既存の翻訳エンジンを解放します");
+                    disposableEngine.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"TranslationManager: 翻訳エンジン解放中にエラー: {ex.Message}");
+                }
+            }
+
             _translationEngine = engine ?? throw new ArgumentNullException(nameof(engine));
             _isInitialized = false; // 新しいエンジンで再初期化が必要
             Debug.WriteLine($"TranslationManager: Translation engine changed to {engine.GetType().Name}");
@@ -246,6 +274,7 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// <returns>現在使用中の翻訳エンジン</returns>
         public ITranslationEngine GetCurrentEngine()
         {
+            CheckDisposed();
             return _translationEngine;
         }
 
@@ -254,6 +283,8 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// </summary>
         public ITranslationEngine GetOrCreateEngine(TranslationEngineType engineType)
         {
+            CheckDisposed();
+
             switch (engineType)
             {
                 case TranslationEngineType.AI:
@@ -279,6 +310,7 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// </summary>
         public void ClearCache()
         {
+            CheckDisposed();
             _translationCache = new TranslationCache(1000);
             Debug.WriteLine("TranslationManager: Cache cleared");
         }
@@ -289,7 +321,81 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// <returns>キャッシュサイズ</returns>
         public int GetCacheSize()
         {
+            CheckDisposed();
             return _translationCache?.Count ?? 0;
         }
+
+        #region IDisposable の実装
+
+        /// <summary>
+        /// リソースを解放します
+        /// </summary>
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// リソースを解放します
+        /// </summary>
+        /// <param name="disposing">マネージドリソースも解放する場合は true</param>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_isDisposed)
+            {
+                if (disposing)
+                {
+                    try
+                    {
+                        Debug.WriteLine("TranslationManager: リソースを解放しています...");
+
+                        // キャッシュのクリア
+                        if (_translationCache != null)
+                        {
+                            _translationCache.Clear();
+
+                            // TranslationCacheがIDisposableを実装している場合は解放
+                            if (_translationCache is IDisposable disposableCache)
+                            {
+                                disposableCache.Dispose();
+                            }
+
+                            _translationCache = null;
+                        }
+
+                        // 翻訳エンジンの解放
+                        if (_translationEngine is IDisposable disposableEngine)
+                        {
+                            Debug.WriteLine("TranslationManager: 翻訳エンジンを解放しています...");
+                            disposableEngine.Dispose();
+                        }
+
+                        _translationEngine = null;
+
+                        Debug.WriteLine("TranslationManager: すべてのリソースを解放しました");
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"TranslationManager: リソース解放中にエラーが発生しました: {ex.Message}");
+                    }
+                }
+
+                _isDisposed = true;
+            }
+        }
+
+        /// <summary>
+        /// オブジェクトが破棄されていないことを確認します
+        /// </summary>
+        private void CheckDisposed()
+        {
+            if (_isDisposed)
+            {
+                throw new ObjectDisposedException(nameof(TranslationManager), "翻訳マネージャーは既に破棄されています");
+            }
+        }
+
+        #endregion
     }
 }

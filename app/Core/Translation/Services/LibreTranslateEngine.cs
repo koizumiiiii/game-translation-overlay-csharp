@@ -11,8 +11,10 @@ using Newtonsoft.Json;
 
 namespace GameTranslationOverlay.Core.Translation.Services
 {
-    public class LibreTranslateEngine : ITranslationEngine
+    public class LibreTranslateEngine : ITranslationEngine, IDisposable
     {
+        private HttpClient _httpClient;
+        private bool _isDisposed = false;
         private readonly string baseUrl;
         private readonly HttpClient httpClient;
         private bool isInitialized = false;
@@ -60,8 +62,45 @@ namespace GameTranslationOverlay.Core.Translation.Services
             }
         }
 
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_isDisposed)
+            {
+                if (disposing)
+                {
+                    try
+                    {
+                        _httpClient?.Dispose();
+                        _httpClient = null;
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"LibreTranslateEngine: リソース解放中にエラーが発生しました: {ex.Message}");
+                    }
+                }
+
+                _isDisposed = true;
+            }
+        }
+
+        // 各メソッドの先頭に破棄済みチェックを追加
+        private void CheckDisposed()
+        {
+            if (_isDisposed)
+            {
+                throw new ObjectDisposedException(nameof(LibreTranslateEngine));
+            }
+        }
+
         public async Task<string> TranslateAsync(string text, string fromLang, string toLang)
         {
+            CheckDisposed();
             if (!isInitialized)
             {
                 return "LibreTranslateサーバーが初期化されていません。翻訳機能は現在使用できません。";

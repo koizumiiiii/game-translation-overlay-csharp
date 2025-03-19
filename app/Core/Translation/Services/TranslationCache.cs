@@ -1,17 +1,19 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
+using System.Diagnostics;
 
 namespace GameTranslationOverlay.Core.Translation.Services
 {
     /// <summary>
     /// 翻訳結果をキャッシュするクラス
     /// </summary>
-    public class TranslationCache
+    public class TranslationCache : IDisposable
     {
-        private readonly Dictionary<string, CacheEntry> _cache = new Dictionary<string, CacheEntry>();
+        // 重複定義を修正 - 1つのみに統合
+        private Dictionary<string, CacheEntry> _cache = new Dictionary<string, CacheEntry>();
         private readonly int _maxEntries;
+        private bool _isDisposed = false;
 
         /// <summary>
         /// コンストラクタ
@@ -32,6 +34,9 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// <returns>キャッシュされた翻訳（存在しない場合はnull）</returns>
         public string GetTranslation(string sourceText, string sourceLang, string targetLang)
         {
+            // 破棄状態チェックを追加
+            CheckDisposed();
+
             string key = GenerateKey(sourceText, sourceLang, targetLang);
 
             lock (_cache)
@@ -56,6 +61,9 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// <param name="targetLang">翻訳先の言語</param>
         public void AddTranslation(string sourceText, string translatedText, string sourceLang, string targetLang)
         {
+            // 破棄状態チェックを追加
+            CheckDisposed();
+
             if (string.IsNullOrWhiteSpace(sourceText) || string.IsNullOrWhiteSpace(translatedText))
             {
                 return;
@@ -88,10 +96,49 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// </summary>
         public void Clear()
         {
+            CheckDisposed();
+
             lock (_cache)
             {
                 _cache.Clear();
-                Debug.WriteLine("TranslationCache: Cache cleared");
+            }
+        }
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_isDisposed)
+            {
+                if (disposing)
+                {
+                    // キャッシュのクリア
+                    try
+                    {
+                        lock (_cache)
+                        {
+                            _cache.Clear();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"Error during TranslationCache disposal: {ex.Message}");
+                    }
+                }
+
+                _isDisposed = true;
+            }
+        }
+
+        private void CheckDisposed()
+        {
+            if (_isDisposed)
+            {
+                throw new ObjectDisposedException(nameof(TranslationCache));
             }
         }
 
@@ -102,6 +149,8 @@ namespace GameTranslationOverlay.Core.Translation.Services
         {
             get
             {
+                CheckDisposed();
+
                 lock (_cache)
                 {
                     return _cache.Count;
@@ -130,6 +179,12 @@ namespace GameTranslationOverlay.Core.Translation.Services
         /// </summary>
         private string GenerateKey(string sourceText, string sourceLang, string targetLang)
         {
+            // null チェックを追加して NullReferenceException を防止
+            if (string.IsNullOrEmpty(sourceText))
+            {
+                return $"{sourceLang}|{targetLang}|";
+            }
+
             return $"{sourceLang}|{targetLang}|{sourceText.Trim()}";
         }
 
