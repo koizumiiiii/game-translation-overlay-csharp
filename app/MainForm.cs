@@ -23,6 +23,7 @@ using GameTranslationOverlay.Core.OCR.AI;
 using GameTranslationOverlay.Core.Configuration;
 using TranslationLanguageManager = GameTranslationOverlay.Core.Translation.Services.LanguageManager;
 using UILanguageManager = GameTranslationOverlay.Core.UI.LanguageManager;
+using System.Collections.Generic;
 
 namespace GameTranslationOverlay
 {
@@ -383,7 +384,16 @@ namespace GameTranslationOverlay
                         progressOverlay.UpdateStatus(OptimizationProgressOverlay.OptimizationStep.ApplyingOptimization);
 
                         // ゲームプロファイルに保存
-                        _gameProfiles.SaveProfile(gameTitle, optimalSettings);
+                        var profileSettings = new OcrOptimizer.OptimalSettings
+                        {
+                            ConfidenceThreshold = optimalSettings.ConfidenceThreshold,
+                            PreprocessingOptions = optimalSettings.ToPreprocessingOptions(),
+                            LastOptimized = DateTime.Now,
+                            OptimizationAttempts = 1,
+                            IsOptimized = true,
+                            AiSuggestions = new Dictionary<string, object>() // 必要に応じて値を追加
+                        };
+                        _gameProfiles.SaveProfile(gameTitle, profileSettings);
 
                         // 成功を記録
                         ApiUsageManager.Instance.RecordApiCall(gameTitle, true);

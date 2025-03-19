@@ -12,6 +12,7 @@ using GameTranslationOverlay.Core.Diagnostics;
 using GameTranslationOverlay.Core.Security;
 using GameTranslationOverlay.Core.Utils;
 using OCRNamespace = GameTranslationOverlay.Core.OCR;
+using GameTranslationOverlay.Core.OCR;
 
 namespace GameTranslationOverlay.Core.OCR.AI
 {
@@ -122,123 +123,62 @@ namespace GameTranslationOverlay.Core.OCR.AI
         /// <param name="gameTitle">ゲームタイトル</param>
         /// <param name="sampleScreen">サンプル画面</param>
         /// <returns>最適化された設定</returns>
-        public async Task<OptimalSettings> OptimizeForGame(string gameTitle, Bitmap sampleScreen)
+        public async Task<OcrOptimalSettings> OptimizeForGame(string gameTitle, Bitmap sampleScreen)
         {
-            if (string.IsNullOrWhiteSpace(gameTitle))
-            {
-                throw new ArgumentException("Game title cannot be empty", nameof(gameTitle));
-            }
+            Debug.WriteLine($"OptimizeForGame: {gameTitle} のOCR最適化を開始");
 
-            if (sampleScreen == null)
-            {
-                throw new ArgumentNullException(nameof(sampleScreen), "Sample screen cannot be null");
-            }
-
-            // ログ
-            Debug.WriteLine($"Starting OCR optimization for: {gameTitle}");
+            // AIテキスト抽出の直前にデバッグ出力を追加
+            Debug.WriteLine("AIによるテキスト抽出を開始します...");
+            bool hasSufficientText = await HasSufficientText(sampleScreen);
+            Debug.WriteLine($"HasSufficientText 結果: {hasSufficientText}");
 
             try
             {
-                // 既存の最適化設定をチェック
-                if (_optimizationHistory.TryGetValue(gameTitle, out var existingSettings))
+                // AIによるテキスト抽出
+                List<TextRegion> aiTextRegions = await ExtractTextWithAI(sampleScreen);
+                Debug.WriteLine($"AI応答: {aiTextRegions.Count}個のテキスト領域を抽出");
+
+                // テキスト領域に基づく最適設定の生成
+                OcrOptimalSettings optimalSettings = new OcrOptimalSettings();
+
+                // デフォルト設定から開始
+                optimalSettings.ConfidenceThreshold = 0.5f;
+                optimalSettings.ContrastLevel = 1.0f;
+                optimalSettings.BrightnessLevel = 1.0f;
+                optimalSettings.SharpnessLevel = 0.0f;
+                optimalSettings.NoiseReduction = 0;
+                optimalSettings.ScaleFactor = 1.0f;
+
+                // AI結果に基づいた設定調整
+                if (aiTextRegions.Count > 0)
                 {
-                    // 既に十分な最適化がされているか、最適化試行が多すぎる場合はスキップ
-                    if (existingSettings.IsOptimized ||
-                        (existingSettings.OptimizationAttempts >= MAX_OPTIMIZATION_ATTEMPTS &&
-                         (DateTime.Now - existingSettings.LastOptimized).TotalHours < MIN_OPTIMIZATION_INTERVAL_HOURS))
+                    // テキスト特性に基づく調整
+                    if (ContainsPixelatedFont(aiTextRegions))
                     {
-                        Debug.WriteLine($"Using existing optimization for {gameTitle} (last optimized: {existingSettings.LastOptimized})");
-                        return existingSettings;
+                        optimalSettings.SharpnessLevel = 0.0f; // ピクセルフォントではシャープネスを下げる
+                        optimalSettings.NoiseReduction = 0;    // ノイズ除去も不要
+                    }
+                    else if (ContainsStylizedFont(aiTextRegions))
+                    {
+                        optimalSettings.ContrastLevel = 1.4f;  // 装飾フォントではコントラストを上げる
                     }
                 }
 
-                // テキストが十分に表示されているかチェック
-                bool hasSufficientText = await HasSufficientText(sampleScreen);
-                if (!hasSufficientText)
-                {
-                    Debug.WriteLine("Insufficient text in sample image for optimization");
-                    throw new InvalidOperationException("テキストが十分に表示されていません。会話やメニュー画面など、テキストが多く表示されている画面で実行してください。");
-                }
-
-                // 言語を検出（最適なAI選択のため）
-                bool isJapaneseText = await DetectJapaneseText(sampleScreen, _ocrEngine);
-                Debug.WriteLine($"Detected language: {(isJapaneseText ? "Japanese" : "Non-Japanese")}");
-
-                // AIを使ってテキスト領域を抽出（「正解」データとして使用）- 元画像を直接使用
-                List<TextRegion> aiTextRegions = new List<TextRegion>();
-                try
-                {
-                    // AI処理を行う前に画像を保存
-                    string debugDir = Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                        "GameTranslationOverlay", "Debug");
-
-                    // ディレクトリが存在することを確認
-                    if (!Directory.Exists(debugDir))
-                    {
-                        Directory.CreateDirectory(debugDir);
-                    }
-
-                    string imagePath = Path.Combine(debugDir, $"ai_input_{DateTime.Now:yyyyMMdd_HHmmss}.png");
-                    sampleScreen.Save(imagePath, System.Drawing.Imaging.ImageFormat.Png);
-                    Debug.WriteLine($"AI入力画像を保存しました: {imagePath}");
-
-                    // 前処理なしで直接元画像を使用
-                    aiTextRegions = await _visionClient.ExtractTextFromImage(sampleScreen, isJapaneseText);
-
-                    Debug.WriteLine($"AI detected {aiTextRegions.Count} text regions using original image without preprocessing");
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"AI text extraction error: {ex.Message}");
-                    throw new InvalidOperationException($"テキスト抽出中にエラーが発生しました: {ex.Message}", ex);
-                }
-
-                if (aiTextRegions.Count == 0)
-                {
-                    Debug.WriteLine("AI could not detect any text in the image");
-                    throw new InvalidOperationException("AIがテキストを検出できませんでした。別の画面で再試行してください。");
-                }
-
-                // AI結果に基づいて最適な設定を生成
-                OptimalSettings optimalSettings = await GenerateOptimalSettings(sampleScreen, aiTextRegions);
-
-                // 最適化結果を保存
-                optimalSettings.IsOptimized = true;
-                optimalSettings.LastOptimized = DateTime.Now;
-
-                // 既存の設定があれば更新、なければ新規追加
-                if (_optimizationHistory.TryGetValue(gameTitle, out var existing))
-                {
-                    optimalSettings.OptimizationAttempts = existing.OptimizationAttempts + 1;
-                    _optimizationHistory[gameTitle] = optimalSettings;
-                }
-                else
-                {
-                    _optimizationHistory[gameTitle] = optimalSettings;
-                }
-
-                // 設定を保存
-                SaveOptimizationSettings();
-
-                // 設定をOCRエンジンに適用
-                if (_ocrEngine is OcrManager manager)
-                {
-                    manager.SetConfidenceThreshold(optimalSettings.ConfidenceThreshold);
-                    // Utils名前空間からOCR名前空間に変換
-                    manager.SetPreprocessingOptions(optimalSettings.PreprocessingOptions);
-                    manager.EnablePreprocessing(true);
-                }
-
-                Debug.WriteLine($"Optimized OCR settings for {gameTitle}: " +
-                               $"Confidence={optimalSettings.ConfidenceThreshold}");
+                // 設定をログに出力
+                Debug.WriteLine($"生成された最適設定: 信頼度={optimalSettings.ConfidenceThreshold}, " +
+                                $"コントラスト={optimalSettings.ContrastLevel}, " +
+                                $"明るさ={optimalSettings.BrightnessLevel}, " +
+                                $"シャープネス={optimalSettings.SharpnessLevel}, " +
+                                $"ノイズ除去={optimalSettings.NoiseReduction}, " +
+                                $"スケール={optimalSettings.ScaleFactor}");
 
                 return optimalSettings;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error during OCR optimization: {ex.Message}");
-                throw;
+                Debug.WriteLine($"OCR最適化中に例外が発生: {ex.Message}");
+                Debug.WriteLine($"スタックトレース: {ex.StackTrace}");
+                throw; // 例外を再スロー
             }
         }
 
@@ -374,6 +314,10 @@ namespace GameTranslationOverlay.Core.OCR.AI
             };
         }
 
+        #endregion
+
+        #region Private Methods
+
         /// <summary>
         /// テキストが十分に表示されているかを確認
         /// </summary>
@@ -411,22 +355,40 @@ namespace GameTranslationOverlay.Core.OCR.AI
             }
         }
 
-        #endregion
+        private async Task<List<TextRegion>> ExtractTextWithAI(Bitmap image)
+        {
+            Debug.WriteLine("ExtractTextWithAI: AI画像認識を実行");
 
-        #region Private Methods
+            try
+            {
+                // 言語検出とAPIの選択
+                bool isJapanese = await IsJapaneseTextDominant(image);
+                Debug.WriteLine($"言語検出結果: {(isJapanese ? "日本語" : "非日本語")}");
+
+                Debug.WriteLine($"選択したAPI: {(isJapanese ? "GPT-4 Vision" : "Gemini Vision")}");
+
+                // API呼び出し
+                var regions = await _visionClient.ExtractTextFromImage(image, isJapanese);
+                Debug.WriteLine($"API呼び出し結果: {regions.Count}個のテキスト領域を検出");
+
+                return regions;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"AI画像認識中にエラー: {ex.Message}");
+                throw;
+            }
+        }
 
         /// <summary>
-        /// 画像から日本語テキストを検出
+        /// 画像が日本語テキストを含むかどうかを判定
         /// </summary>
-        /// <param name="image">検出対象の画像</param>
-        /// <param name="ocrEngine">OCRエンジン</param>
-        /// <returns>日本語が含まれている場合はtrue</returns>
-        private async Task<bool> DetectJapaneseText(Bitmap image, IOcrEngine ocrEngine)
+        private async Task<bool> IsJapaneseTextDominant(Bitmap image)
         {
             try
             {
                 // OCRを使用してテキスト領域を検出
-                var regions = await ocrEngine.DetectTextRegionsAsync(image);
+                var regions = await _ocrEngine.DetectTextRegionsAsync(image);
 
                 // テキスト領域がない場合
                 if (regions == null || regions.Count == 0)
@@ -495,13 +457,13 @@ namespace GameTranslationOverlay.Core.OCR.AI
         }
 
         /// <summary>
-        /// OcrNamespaceのPreprocessingOptionsをUtilsNamespaceのPreprocessingOptionsに変換
+        /// OCRNamespaceのPreprocessingOptionsをUtilsNamespaceのPreprocessingOptionsに変換
         /// </summary>
         private GameTranslationOverlay.Core.Utils.PreprocessingOptions ConvertToUtilsPreprocessingOptions(OCRNamespace.PreprocessingOptions ocrOptions)
         {
             if (ocrOptions == null)
                 return new GameTranslationOverlay.Core.Utils.PreprocessingOptions();
-                
+
             return new GameTranslationOverlay.Core.Utils.PreprocessingOptions
             {
                 ContrastLevel = ocrOptions.ContrastLevel,
@@ -745,52 +707,76 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 string encryptedJson = File.ReadAllText(_settingsFilePath);
                 string json = EncryptionHelper.DecryptWithAes(encryptedJson, "GameTranslationOverlay");
 
-                if (string.IsNullOrWhiteSpace(json))
-                {
-                    // 復号化に失敗した場合は暗号化されていないとみなして直接読み込み
-                    json = encryptedJson;
-                }
-
-                // JSONデシリアライズ
+                // JSONをデシリアライズ
                 var serializableData = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json);
-                _optimizationHistory.Clear();
 
+                // 設定をメモリに読み込み
+                _optimizationHistory.Clear();
                 foreach (var pair in serializableData)
                 {
-                    string gameTitle = pair.Key;
-                    var element = pair.Value;
+                    var gameTitle = pair.Key;
+                    var data = pair.Value;
 
-                    // 設定を復元
-                    var settings = new OptimalSettings
+                    // 基本設定
+                    float confidenceThreshold = data.GetProperty("ConfidenceThreshold").GetSingle();
+                    DateTime lastOptimized = DateTime.Parse(data.GetProperty("LastOptimized").GetString());
+                    int optimizationAttempts = data.GetProperty("OptimizationAttempts").GetInt32();
+                    bool isOptimized = data.GetProperty("IsOptimized").GetBoolean();
+
+                    // 前処理オプション
+                    var preprocessingData = data.GetProperty("PreprocessingOptions");
+                    var preprocessingOptions = new GameTranslationOverlay.Core.Utils.PreprocessingOptions
                     {
-                        ConfidenceThreshold = element.GetProperty("ConfidenceThreshold").GetSingle(),
-                        PreprocessingOptions = new GameTranslationOverlay.Core.Utils.PreprocessingOptions
-                        {
-                            ContrastLevel = element.GetProperty("PreprocessingOptions").GetProperty("ContrastLevel").GetSingle(),
-                            BrightnessLevel = element.GetProperty("PreprocessingOptions").GetProperty("BrightnessLevel").GetSingle(),
-                            SharpnessLevel = element.GetProperty("PreprocessingOptions").GetProperty("SharpnessLevel").GetSingle(),
-                            NoiseReduction = element.GetProperty("PreprocessingOptions").GetProperty("NoiseReduction").GetInt32(),
-                            ScaleFactor = element.GetProperty("PreprocessingOptions").GetProperty("ScaleFactor").GetSingle(),
-                            Threshold = element.GetProperty("PreprocessingOptions").GetProperty("Threshold").GetInt32(),
-                            Padding = element.GetProperty("PreprocessingOptions").GetProperty("Padding").GetInt32()
-                        },
-                        LastOptimized = DateTime.Parse(element.GetProperty("LastOptimized").GetString()),
-                        OptimizationAttempts = element.GetProperty("OptimizationAttempts").GetInt32(),
-                        IsOptimized = element.GetProperty("IsOptimized").GetBoolean()
+                        ContrastLevel = preprocessingData.GetProperty("ContrastLevel").GetSingle(),
+                        BrightnessLevel = preprocessingData.GetProperty("BrightnessLevel").GetSingle(),
+                        SharpnessLevel = preprocessingData.GetProperty("SharpnessLevel").GetSingle(),
+                        NoiseReduction = preprocessingData.GetProperty("NoiseReduction").GetInt32(),
+                        ScaleFactor = preprocessingData.GetProperty("ScaleFactor").GetSingle()
                     };
 
-                    // AIの提案があれば復元
-                    if (element.TryGetProperty("AiSuggestions", out var suggestionsElement))
+                    // Thresholdプロパティがあれば設定
+                    if (preprocessingData.TryGetProperty("Threshold", out var thresholdValue))
                     {
-                        var suggestions = new Dictionary<string, object>();
-                        foreach (var property in suggestionsElement.EnumerateObject())
-                        {
-                            suggestions[property.Name] = property.Value.GetString();
-                        }
-                        settings.AiSuggestions = suggestions;
+                        preprocessingOptions.Threshold = thresholdValue.GetInt32();
                     }
 
-                    _optimizationHistory[gameTitle] = settings;
+                    // Paddingプロパティがあれば設定
+                    if (preprocessingData.TryGetProperty("Padding", out var paddingValue))
+                    {
+                        preprocessingOptions.Padding = paddingValue.GetInt32();
+                    }
+
+                    // AIサジェスションがあれば設定
+                    Dictionary<string, object> aiSuggestions = new Dictionary<string, object>();
+                    if (data.TryGetProperty("AiSuggestions", out var suggestionsElement))
+                    {
+                        foreach (var prop in suggestionsElement.EnumerateObject())
+                        {
+                            if (prop.Value.ValueKind == JsonValueKind.String)
+                            {
+                                aiSuggestions[prop.Name] = prop.Value.GetString();
+                            }
+                            else if (prop.Value.ValueKind == JsonValueKind.Number)
+                            {
+                                aiSuggestions[prop.Name] = prop.Value.GetDouble();
+                            }
+                            else if (prop.Value.ValueKind == JsonValueKind.True || prop.Value.ValueKind == JsonValueKind.False)
+                            {
+                                aiSuggestions[prop.Name] = prop.Value.GetBoolean();
+                            }
+                        }
+                    }
+
+                    // 設定をメモリに追加
+                    _optimizationHistory[gameTitle] = new OptimalSettings
+                    {
+                        ConfidenceThreshold = confidenceThreshold,
+                        PreprocessingOptions = preprocessingOptions,
+                        LastOptimized = lastOptimized,
+                        OptimizationAttempts = optimizationAttempts,
+                        IsOptimized = isOptimized,
+                        AiSuggestions = aiSuggestions
+                    };
                 }
 
                 Debug.WriteLine($"Loaded OCR optimization settings for {_optimizationHistory.Count} games");
@@ -798,268 +784,64 @@ namespace GameTranslationOverlay.Core.OCR.AI
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error loading OCR optimization settings: {ex.Message}");
-                // 読み込みに失敗した場合は空の状態を維持
                 _optimizationHistory.Clear();
             }
         }
 
         /// <summary>
-        // AIが認識した結果に基づいて、最適なOCR設定を生成
+        /// 装飾的なフォントかどうかを判定
         /// </summary>
-        private async Task<OptimalSettings> GenerateOptimalSettings(Bitmap image, List<TextRegion> aiTextRegions)
+        private bool ContainsStylizedFont(List<TextRegion> textRegions)
         {
-            // テキスト特性の分析
-            bool hasSmallFont = HasSmallFont(aiTextRegions, image);
-            bool hasLowContrast = HasLowContrast(image);
-            bool hasJapaneseText = ContainsJapaneseText(aiTextRegions);
-            bool hasPixelatedFont = ContainsPixelatedFont(aiTextRegions);
+            // この実装は簡易的なもの
+            // 実際には、フォントの特徴を分析してより高度な判定を行うことが望ましい
 
-            // 基本設定から開始
-            OptimalSettings settings = new OptimalSettings
-            {
-                ConfidenceThreshold = 0.4f, // 下げて検出率を向上
-                PreprocessingOptions = new GameTranslationOverlay.Core.Utils.PreprocessingOptions
-                {
-                    ContrastLevel = 1.0f,
-                    BrightnessLevel = 1.0f,
-                    SharpnessLevel = 0.0f,
-                    NoiseReduction = 0,
-                    ScaleFactor = 1.0f,
-                    Threshold = 0,
-                    Padding = 0
-                }
-            };
+            // テキスト領域の高さと幅の比率を分析
+            var heightWidthRatios = textRegions
+                .Where(r => r.Bounds.Width > 0 && r.Bounds.Height > 0)
+                .Select(r => (double)r.Bounds.Height / r.Bounds.Width).ToList();
 
-            // 特性に基づく調整
-            if (hasSmallFont)
+            // 異常に高いか低い比率の領域があれば、装飾的なフォントの可能性
+            if (heightWidthRatios.Any(r => r > 2.0 || r < 0.3))
             {
-                // 小さいフォント用の設定
-                settings.PreprocessingOptions.ScaleFactor = 1.5f;
-                settings.ConfidenceThreshold = 0.3f; // さらに閾値を下げる
-                Debug.WriteLine("Detected small font, adjusting scale factor to 1.5 and reducing confidence threshold to 0.3");
+                return true;
             }
 
-            if (hasLowContrast)
-            {
-                // 低コントラスト用の設定
-                settings.PreprocessingOptions.ContrastLevel = 1.4f; // より強いコントラスト
-                Debug.WriteLine("Detected low contrast, increasing contrast level to 1.4");
-            }
+            // 特定の文字パターンに基づく判定
+            // 例：特殊記号や装飾的な文字の使用が多いかどうか
+            var allText = string.Join(" ", textRegions.Select(r => r.Text));
+            var specialCharCount = allText.Count(c => !char.IsLetterOrDigit(c) && !char.IsWhiteSpace(c));
+            var totalCharCount = allText.Length;
 
-            if (hasJapaneseText)
-            {
-                // 日本語テキスト用の設定
-                settings.ConfidenceThreshold = 0.3f; // 日本語は認識難度が高いので閾値を下げる
-                                                     // 日本語の場合は画像前処理のカスタマイズ
-                settings.PreprocessingOptions.SharpnessLevel = hasPixelatedFont ? 0.0f : 1.0f;
-                settings.PreprocessingOptions.ScaleFactor = Math.Max(settings.PreprocessingOptions.ScaleFactor, 1.2f);
-                Debug.WriteLine("Optimizing for Japanese text with specialized settings");
-            }
-
-            if (hasPixelatedFont)
-            {
-                // ピクセルフォント用の設定
-                settings.PreprocessingOptions.SharpnessLevel = 0.0f; // シャープネスを抑制
-                settings.PreprocessingOptions.NoiseReduction = 0;    // ノイズ除去を無効化
-                settings.ConfidenceThreshold = 0.25f;  // 大幅に閾値を下げる
-                Debug.WriteLine("Detected pixelated font, using specialized settings");
-            }
-
-            // AIの結果をそのまま使用するモードのテスト（前処理なし）
-            var noPreprocessSettings = new OptimalSettings
-            {
-                ConfidenceThreshold = 0.3f,
-                PreprocessingOptions = new GameTranslationOverlay.Core.Utils.PreprocessingOptions
-                {
-                    ContrastLevel = 1.0f,
-                    BrightnessLevel = 1.0f,
-                    SharpnessLevel = 0.0f,
-                    NoiseReduction = 0,
-                    ScaleFactor = 1.0f,
-                    Threshold = 0,
-                    Padding = 0
-                },
-                IsOptimized = true,
-                AiSuggestions = new Dictionary<string, object>
-        {
-            { "UseOriginalImage", true }
-        }
-            };
-
-            // 様々な設定を試して最適なものを選定
-            Dictionary<OptimalSettings, double> settingsScores = new Dictionary<OptimalSettings, double>();
-            var testSettings = GenerateTestSettings(settings); // 基本設定から派生したテスト設定
-
-            // 前処理なしの設定を追加
-            testSettings.Add(noPreprocessSettings);
-
-            foreach (var testSetting in testSettings)
-            {
-                if (_ocrEngine is OcrManager ocrManager)
-                {
-                    ocrManager.SetConfidenceThreshold(testSetting.ConfidenceThreshold);
-
-                    // 前処理設定の適用
-                    ocrManager.SetPreprocessingOptions(testSetting.PreprocessingOptions);
-
-                    // AiSuggestionsに特別な指示がある場合は処理
-                    bool useOriginalImage = false;
-                    if (testSetting.AiSuggestions != null &&
-                        testSetting.AiSuggestions.TryGetValue("UseOriginalImage", out var val) &&
-                        val is bool boolVal && boolVal)
-                    {
-                        useOriginalImage = true;
-                    }
-
-                    // 前処理の有効/無効を設定
-                    ocrManager.EnablePreprocessing(!useOriginalImage);
-                }
-
-                // テキスト領域を検出
-                List<TextRegion> ocrTextRegions = await _ocrEngine.DetectTextRegionsAsync(image);
-                string ocrExtractedText = string.Join(" ", ocrTextRegions.Select(r => r.Text));
-                string aiExtractedText = string.Join(" ", aiTextRegions.Select(r => r.Text));
-
-                // OCR結果とAI結果の類似度を計算
-                double similarity = CalculateTextSimilarity(ocrExtractedText, aiExtractedText);
-
-                // 現在のテスト設定が元画像を使用しているかどうかを確認
-                bool currentUseOriginalImage = false;
-                if (testSetting.AiSuggestions != null &&
-                    testSetting.AiSuggestions.TryGetValue("UseOriginalImage", out var origVal) &&
-                    origVal is bool origBoolVal && origBoolVal)
-                {
-                    currentUseOriginalImage = true;
-                }
-
-                Debug.WriteLine($"Test settings similarity score: {similarity:F4} (Conf={testSetting.ConfidenceThreshold}, Preprocess={(currentUseOriginalImage ? "None" : "Applied")})");
-
-                settingsScores[testSetting] = similarity;
-            }
-
-            // 最適な設定を選択
-            if (settingsScores.Count == 0)
-            {
-                Debug.WriteLine("No valid test settings found, using default optimal settings");
-                return settings;
-            }
-
-            var optimalSetting = settingsScores.OrderByDescending(pair => pair.Value).First().Key;
-            optimalSetting.IsOptimized = true;
-            optimalSetting.LastOptimized = DateTime.Now;
-
-            Debug.WriteLine($"Selected optimal settings with similarity score: {settingsScores[optimalSetting]:F4}");
-
-            // 前処理を使用しない場合はAiSuggestionsに保存
-            bool selectedOriginalImage = false;
-            if (optimalSetting.AiSuggestions != null &&
-                optimalSetting.AiSuggestions.TryGetValue("UseOriginalImage", out var orig) &&
-                orig is bool origBool && origBool)
-            {
-                selectedOriginalImage = true;
-            }
-
-            if (selectedOriginalImage)
-            {
-                Debug.WriteLine("Best result was achieved without preprocessing - will use original images directly");
-            }
-
-            return optimalSetting;
+            // 特殊文字の割合が高い場合は装飾的なフォントと判断
+            return totalCharCount > 0 && (double)specialCharCount / totalCharCount > 0.2;
         }
 
         /// <summary>
-        /// 小さいフォントかどうかを判定
+        /// ピクセル化されたフォントかどうかを判定
         /// </summary>
-        private bool HasSmallFont(List<TextRegion> textRegions, Bitmap image)
-        {
-            if (textRegions == null || textRegions.Count == 0)
-                return false;
-
-            // 文字の高さの平均値を計算
-            double averageHeight = textRegions.Average(r => r.Bounds.Height);
-
-            // イメージの高さに対する相対的な高さとして評価
-            double relativeHeight = averageHeight / (double)image.Height;
-
-            // 小さいフォントの閾値（画像の高さの3%未満を小さいフォントと判断）
-            return averageHeight < 15 || relativeHeight < 0.03;
-        }
-
-        // OcrOptimizer.cs - 新規メソッド: HasLowContrast
-        private bool HasLowContrast(Bitmap image)
-        {
-            try
-            {
-                // シンプルなコントラスト検出のために画像をサンプリング
-                int sampleSize = 20; // 20x20のグリッドでサンプリング
-                int stepX = Math.Max(1, image.Width / sampleSize);
-                int stepY = Math.Max(1, image.Height / sampleSize);
-
-                int minBrightness = 255;
-                int maxBrightness = 0;
-
-                for (int y = 0; y < image.Height; y += stepY)
-                {
-                    for (int x = 0; x < image.Width; x += stepX)
-                    {
-                        Color pixel = image.GetPixel(x, y);
-                        int brightness = (int)(0.299 * pixel.R + 0.587 * pixel.G + 0.114 * pixel.B);
-
-                        minBrightness = Math.Min(minBrightness, brightness);
-                        maxBrightness = Math.Max(maxBrightness, brightness);
-                    }
-                }
-
-                // コントラスト比を計算
-                double contrastRatio = (maxBrightness > 0) ? (double)maxBrightness / Math.Max(1, minBrightness) : 1.0;
-
-                Debug.WriteLine($"Image contrast ratio: {contrastRatio:F2}");
-
-                // コントラスト比が低い場合はtrue
-                return contrastRatio < 4.0;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error detecting contrast: {ex.Message}");
-                return false;
-            }
-        }
-
-        // OcrOptimizer.cs - 新規メソッド: ContainsJapaneseText
-        private bool ContainsJapaneseText(List<TextRegion> textRegions)
-        {
-            if (textRegions == null || textRegions.Count == 0)
-                return false;
-
-            // すべてのテキストを連結
-            string allText = string.Join(" ", textRegions.Select(r => r.Text));
-
-            // IsJapaneseTextDominantメソッドを使用
-            return IsJapaneseTextDominant(allText);
-        }
-
-        // OcrOptimizer.cs - 新規メソッド: ContainsPixelatedFont
         private bool ContainsPixelatedFont(List<TextRegion> textRegions)
         {
-            if (textRegions == null || textRegions.Count == 0)
-                return false;
+            // この実装は簡易的なもの
+            // 実際には画像分析を行うことが望ましい
 
-            // ピクセルフォントの特徴：同じ高さの文字領域が多い
-            var heightGroups = textRegions
-                .GroupBy(r => r.Bounds.Height)
-                .OrderByDescending(g => g.Count())
-                .ToList();
-
-            // 同じ高さのグループが支配的で、その高さが比較的小さい場合
-            if (heightGroups.Count > 0)
+            // テキスト領域が小さい場合はピクセル化されている可能性が高い
+            var smallRegions = textRegions.Count(r => r.Bounds.Height < 15);
+            if (smallRegions > textRegions.Count / 2)
             {
-                int dominantHeight = heightGroups[0].Key;
-                int dominantCount = heightGroups[0].Count();
+                return true;
+            }
 
-                // グループの割合が50%以上で、高さが20ピクセル未満ならピクセルフォントの可能性が高い
-                if ((double)dominantCount / textRegions.Count >= 0.5 && dominantHeight < 20)
+            // 文字の高さが均一であればピクセルフォントの可能性
+            var heights = textRegions.Select(r => r.Bounds.Height).ToList();
+            if (heights.Count > 1)
+            {
+                double avg = heights.Average();
+                double stdDev = Math.Sqrt(heights.Sum(h => Math.Pow(h - avg, 2)) / heights.Count);
+
+                // 標準偏差が小さければ均一な高さと判断
+                if (stdDev < 2.0)
                 {
-                    Debug.WriteLine($"Detected possible pixelated font: {dominantCount} regions with height {dominantHeight}px");
                     return true;
                 }
             }
@@ -1067,64 +849,126 @@ namespace GameTranslationOverlay.Core.OCR.AI
             return false;
         }
 
-        // OcrOptimizer.cs - 新規メソッド: GenerateTestSettings
-        private List<OptimalSettings> GenerateTestSettings(OptimalSettings baseSettings)
+        /// <summary>
+        /// 画像の分析結果を表すクラス
+        /// </summary>
+        private class ImageAnalysisResult
         {
-            var settings = new List<OptimalSettings>();
-
-            // 基本設定を追加
-            settings.Add(baseSettings);
-
-            // バリエーションの追加（基本設定の周辺）
-            // 信頼度閾値のバリエーション
-            foreach (var confDelta in new[] { -0.1f, 0.1f })
-            {
-                var newConf = Math.Max(0.2f, Math.Min(0.9f, baseSettings.ConfidenceThreshold + confDelta));
-                settings.Add(new OptimalSettings
-                {
-                    ConfidenceThreshold = newConf,
-                    PreprocessingOptions = ClonePreprocessingOptions(baseSettings.PreprocessingOptions),
-                    IsOptimized = false
-                });
-            }
-
-            // コントラストのバリエーション
-            foreach (var contrastDelta in new[] { -0.2f, 0.2f })
-            {
-                var newOptions = ClonePreprocessingOptions(baseSettings.PreprocessingOptions);
-                newOptions.ContrastLevel = Math.Max(0.6f, Math.Min(1.5f, newOptions.ContrastLevel + contrastDelta));
-
-                settings.Add(new OptimalSettings
-                {
-                    ConfidenceThreshold = baseSettings.ConfidenceThreshold,
-                    PreprocessingOptions = newOptions,
-                    IsOptimized = false
-                });
-            }
-
-            // スケーリングのバリエーション
-            foreach (var scaleDelta in new[] { -0.2f, 0.2f })
-            {
-                var newOptions = ClonePreprocessingOptions(baseSettings.PreprocessingOptions);
-                newOptions.ScaleFactor = Math.Max(0.8f, Math.Min(2.0f, newOptions.ScaleFactor + scaleDelta));
-
-                settings.Add(new OptimalSettings
-                {
-                    ConfidenceThreshold = baseSettings.ConfidenceThreshold,
-                    PreprocessingOptions = newOptions,
-                    IsOptimized = false
-                });
-            }
-
-            return settings;
+            public double AverageBrightness { get; set; }
+            public double ContrastRatio { get; set; }
+            public bool HasLargeEmptyAreas { get; set; }
+            public bool HasSmallText { get; set; }
         }
 
-        // OcrOptimizer.cs - 新規メソッド: ClonePreprocessingOptions
-        private GameTranslationOverlay.Core.Utils.PreprocessingOptions ClonePreprocessingOptions(
-            GameTranslationOverlay.Core.Utils.PreprocessingOptions options)
+        /// <summary>
+        /// 画像を分析して特性を取得
+        /// </summary>
+        private ImageAnalysisResult AnalyzeImage(Bitmap image)
+        {
+            // 平均輝度と最大/最小輝度を計算
+            double totalBrightness = 0;
+            int minBrightness = 255;
+            int maxBrightness = 0;
+
+            // サンプリングでパフォーマンスを確保
+            int sampleStep = Math.Max(1, image.Width * image.Height / 10000);
+            int samplesCount = 0;
+
+            for (int y = 0; y < image.Height; y += sampleStep)
+            {
+                for (int x = 0; x < image.Width; x += sampleStep)
+                {
+                    Color pixel = image.GetPixel(x, y);
+                    int brightness = (int)(0.299 * pixel.R + 0.587 * pixel.G + 0.114 * pixel.B);
+
+                    totalBrightness += brightness;
+                    minBrightness = Math.Min(minBrightness, brightness);
+                    maxBrightness = Math.Max(maxBrightness, brightness);
+
+                    samplesCount++;
+                }
+            }
+
+            double averageBrightness = totalBrightness / samplesCount;
+            double contrastRatio = (maxBrightness > minBrightness) ? (double)maxBrightness / (minBrightness + 1) : 1.0;
+
+            // 解析結果を返す
+            return new ImageAnalysisResult
+            {
+                AverageBrightness = averageBrightness,
+                ContrastRatio = contrastRatio,
+                HasLargeEmptyAreas = false, // この判定は複雑なので簡略化
+                HasSmallText = false // テキスト領域の情報が必要なので簡略化
+            };
+        }
+
+        /// <summary>
+        /// OCR設定の値域を正規化
+        /// </summary>
+        private void NormalizeSettings(OcrOptimalSettings settings)
+        {
+            // 信頼度閾値は0.0～1.0の範囲に
+            settings.ConfidenceThreshold = Math.Max(0.0f, Math.Min(1.0f, settings.ConfidenceThreshold));
+
+            // コントラストは0.5～2.0の範囲に
+            settings.ContrastLevel = Math.Max(0.5f, Math.Min(2.0f, settings.ContrastLevel));
+
+            // 明るさは0.5～1.5の範囲に
+            settings.BrightnessLevel = Math.Max(0.5f, Math.Min(1.5f, settings.BrightnessLevel));
+
+            // シャープネスは0.0～3.0の範囲に
+            settings.SharpnessLevel = Math.Max(0.0f, Math.Min(3.0f, settings.SharpnessLevel));
+
+            // ノイズ除去は0～3の範囲に
+            settings.NoiseReduction = Math.Max(0, Math.Min(3, settings.NoiseReduction));
+
+            // スケールは0.5～2.0の範囲に
+            settings.ScaleFactor = Math.Max(0.5f, Math.Min(2.0f, settings.ScaleFactor));
+        }
+    }
+
+    /// <summary>
+    /// OCRの最適設定を表すクラス
+    /// </summary>
+    public class OcrOptimalSettings
+    {
+        public float ConfidenceThreshold { get; set; } = 0.5f;
+        public float ContrastLevel { get; set; } = 1.0f;
+        public float BrightnessLevel { get; set; } = 1.0f;
+        public float SharpnessLevel { get; set; } = 0.0f;
+        public int NoiseReduction { get; set; } = 0;
+        public float ScaleFactor { get; set; } = 1.0f;
+        public int Threshold { get; set; } = 0;
+        public int Padding { get; set; } = 0;
+
+        /// <summary>
+        /// PreprocessingOptionsに変換
+        /// </summary>
+        public GameTranslationOverlay.Core.Utils.PreprocessingOptions ToPreprocessingOptions()
         {
             return new GameTranslationOverlay.Core.Utils.PreprocessingOptions
             {
+                ContrastLevel = this.ContrastLevel,
+                BrightnessLevel = this.BrightnessLevel,
+                SharpnessLevel = this.SharpnessLevel,
+                NoiseReduction = this.NoiseReduction,
+                ScaleFactor = this.ScaleFactor,
+                Threshold = this.Threshold,
+                Padding = this.Padding
+            };
+        }
+
+        /// <summary>
+        /// PreprocessingOptionsから生成
+        /// </summary>
+        public static OcrOptimalSettings FromPreprocessingOptions(GameTranslationOverlay.Core.Utils.PreprocessingOptions options, float confidenceThreshold = 0.5f)
+        {
+            if (options == null)
+                return new OcrOptimalSettings();
+
+            return new OcrOptimalSettings
+            {
+                ConfidenceThreshold = confidenceThreshold,
                 ContrastLevel = options.ContrastLevel,
                 BrightnessLevel = options.BrightnessLevel,
                 SharpnessLevel = options.SharpnessLevel,
@@ -1134,7 +978,6 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 Padding = options.Padding
             };
         }
-
-        #endregion
     }
+    #endregion
 }
