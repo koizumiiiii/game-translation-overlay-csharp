@@ -787,32 +787,53 @@ namespace GameTranslationOverlay.Forms
         /// </summary>
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
-            // テキスト検出サービスの破棄
-            if (_textDetectionService != null)
-            {
-                _textDetectionService.Dispose();
-                _textDetectionService = null;
-                Debug.WriteLine("テキスト検出サービスを破棄しました");
-            }
+            Debug.WriteLine("OverlayForm: フォームを閉じています...");
 
-            // 自動非表示タイマーの破棄
-            if (_autoHideTimer != null)
+            try
             {
-                _autoHideTimer.Stop();
-                _autoHideTimer.Dispose();
-                _autoHideTimer = null;
-            }
+                // 翻訳ボックスの破棄（先に処理）
+                if (TranslationBox != null && !TranslationBox.IsDisposed)
+                {
+                    Debug.WriteLine("OverlayForm: 翻訳ボックスを閉じています...");
+                    TranslationBox.Close();
+                    TranslationBox.Dispose();
+                    TranslationBox = null;
+                }
 
-            // 翻訳ボックスの破棄
-            if (TranslationBox != null && !TranslationBox.IsDisposed)
+                // 自動非表示タイマーの破棄
+                if (_autoHideTimer != null)
+                {
+                    _autoHideTimer.Stop();
+                    _autoHideTimer.Dispose();
+                    _autoHideTimer = null;
+                    Debug.WriteLine("OverlayForm: 自動非表示タイマーを破棄しました");
+                }
+
+                // テキスト検出サービスの破棄（最後に処理）
+                if (_textDetectionService != null)
+                {
+                    Debug.WriteLine("OverlayForm: テキスト検出サービスを停止しています...");
+                    _textDetectionService.Stop();
+
+                    Debug.WriteLine("OverlayForm: テキスト検出サービスを破棄しています...");
+                    _textDetectionService.Dispose();
+                    _textDetectionService = null;
+                }
+
+                // 依存関係の解放
+                _currentTextRegions.Clear();
+
+                // 開放の完了をログに記録
+                Debug.WriteLine("OverlayForm: すべてのリソースを正常に解放しました");
+            }
+            catch (Exception ex)
             {
-                TranslationBox.Close();
-                TranslationBox.Dispose();
-                TranslationBox = null;
-                Debug.WriteLine("翻訳ボックスを破棄しました");
+                Debug.WriteLine($"OverlayForm: リソース解放中にエラーが発生しました: {ex.Message}");
             }
-
-            base.OnFormClosed(e);
+            finally
+            {
+                base.OnFormClosed(e);
+            }
         }
     }
 }

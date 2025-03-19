@@ -289,6 +289,7 @@ namespace GameTranslationOverlay
             this.Name = "MainForm";
             this.Text = "Game Translation Overlay";
             this.ResumeLayout(false);
+            this.FormClosing += MainForm_FormClosing;
         }
 
         private void InitializeOptimizationControls()
@@ -742,6 +743,51 @@ namespace GameTranslationOverlay
                     MessageBoxIcon.Error
                 );
                 Application.Exit();
+            }
+        }
+
+        // リソース解放の順序を制御
+        private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            Debug.WriteLine("アプリケーションを終了しています...");
+
+            try
+            {
+                // 1. オーバーレイフォームを先に閉じる
+                if (_overlayForm != null && !_overlayForm.IsDisposed)
+                {
+                    Debug.WriteLine("オーバーレイフォームを閉じています...");
+                    _overlayForm.Close();
+                    _overlayForm = null;
+                }
+
+                // 2. 翻訳マネージャーのクリーンアップ
+                // TranslationManagerがIDisposableを実装していないためDispose呼び出しは行わない
+                _translationManager = null;
+
+                // 3. OCRマネージャーを破棄
+                if (_ocrManager != null)
+                {
+                    Debug.WriteLine("OCRマネージャーを破棄しています...");
+                    _ocrManager.Dispose();
+                    _ocrManager = null;
+                }
+
+                // 4. 最後にResourceManagerのDisposeAllを呼び出し
+                Debug.WriteLine("残りのリソースをクリーンアップしています...");
+                int disposedResources = ResourceManager.DisposeAll();
+                Debug.WriteLine($"{disposedResources}個の残りリソースを解放しました");
+
+                // 5. GCを明示的に実行
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect(); // 2回目のGCで断片化を減らす
+
+                Debug.WriteLine("アプリケーションのクリーンアップが完了しました");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"アプリケーション終了時のエラー: {ex.Message}");
             }
         }
 

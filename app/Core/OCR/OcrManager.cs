@@ -73,8 +73,8 @@ namespace GameTranslationOverlay.Core.OCR
                 _paddleOcrEngine = new PaddleOcrEngine();
                 await _paddleOcrEngine.InitializeAsync();
 
-                // リソースマネージャーに登録
-                ResourceManager.TrackResource(_paddleOcrEngine);
+                // PaddleOCRエンジンはリソースマネージャーに登録しない
+                // PaddleOCR自体がリソース管理を行うため、直接Disposeメソッドで解放する
 
                 Debug.WriteLine("OCRエンジンの初期化が完了しました");
             }
@@ -92,6 +92,13 @@ namespace GameTranslationOverlay.Core.OCR
         /// <returns>検出されたテキスト領域のリスト</returns>
         public async Task<List<TextRegion>> DetectTextRegionsAsync(Bitmap image)
         {
+            // 破棄済みのチェック
+            if (_isDisposed)
+            {
+                Debug.WriteLine("OCR: マネージャーは既に破棄されています");
+                return new List<TextRegion>();
+            }
+
             // メモリ使用量をチェック
             MemoryManagement.CheckMemoryUsage();
 
@@ -331,7 +338,7 @@ namespace GameTranslationOverlay.Core.OCR
                     processedImage = new Bitmap(image);
                 }
 
-                // リソースマネージャーに登録
+                // ビットマップリソースはResourceManagerに登録して追跡
                 ResourceManager.TrackResource(processedImage);
 
                 // OCRエンジンでテキスト領域を検出
@@ -350,6 +357,7 @@ namespace GameTranslationOverlay.Core.OCR
                 if (processedImage != null && processedImage != image)
                 {
                     ResourceManager.ReleaseResource(processedImage);
+                    processedImage = null;
                 }
             }
         }
@@ -479,6 +487,13 @@ namespace GameTranslationOverlay.Core.OCR
         /// </summary>
         public async Task<string> RecognizeTextAsync(Rectangle region)
         {
+            // 破棄済みのチェック
+            if (_isDisposed)
+            {
+                Debug.WriteLine("OCR: マネージャーは既に破棄されています");
+                return string.Empty;
+            }
+
             try
             {
                 // スクリーンキャプチャは呼び出し元で行われることを想定
@@ -713,18 +728,23 @@ namespace GameTranslationOverlay.Core.OCR
                 {
                     try
                     {
-                        // マネージドリソースの破棄
-                        if (_paddleOcrEngine != null)
-                        {
-                            _paddleOcrEngine.Dispose();
-                            _paddleOcrEngine = null;
-                            GC.Collect(); // 明示的なGC呼び出し
-                            GC.WaitForPendingFinalizers();
-                        }
-                        
                         // キャッシュのクリア
                         _ocrCache.Clear();
                         _processingTimes.Clear();
+
+                        // PaddleOCRエンジンは最後に破棄する
+                        // (他のリソースがPaddleOCRに依存している可能性があるため)
+                        if (_paddleOcrEngine != null)
+                        {
+                            Debug.WriteLine("PaddleOCRエンジンを解放しています...");
+                            _paddleOcrEngine.Dispose();
+                            _paddleOcrEngine = null;
+                        }
+
+                        // 明示的なメモリクリーンアップ
+                        GC.Collect();
+                        GC.WaitForPendingFinalizers();
+                        GC.Collect(); // 2回目のGCで断片化を減らす
                     }
                     catch (Exception ex)
                     {
@@ -848,6 +868,6 @@ namespace GameTranslationOverlay.Core.OCR
                 Debug.WriteLine($"プロファイル保存エラー: {ex.Message}");
                 return false;
             }
-        }  
+        }
     }
 }
