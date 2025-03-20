@@ -43,7 +43,8 @@ namespace GameTranslationOverlay.Forms
         private void InitializeComponent()
         {
             this.FormBorderStyle = FormBorderStyle.None;
-            this.BackColor = Color.FromArgb(128, 0, 0, 0); // 半透明の背景
+            this.BackColor = Color.Black;
+            this.Opacity = 0.8; // 80%の不透明度
             this.ShowInTaskbar = false;
             this.TopMost = true;
             this.StartPosition = FormStartPosition.Manual;
