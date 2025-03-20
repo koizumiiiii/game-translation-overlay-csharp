@@ -7,6 +7,7 @@ using System.Text;
 using System.Linq;
 using GameTranslationOverlay.Properties;
 using GameTranslationOverlay.Core.Diagnostics;
+using GameTranslationOverlay.Core.Configuration;
 
 namespace GameTranslationOverlay.Core.Security
 {
@@ -100,9 +101,7 @@ namespace GameTranslationOverlay.Core.Security
         /// <summary>
         /// 指定されたプロバイダーの現在アクティブなAPIキーを取得
         /// </summary>
-        /// <param name="provider">APIプロバイダー</param>
-        /// <returns>復号化されたAPIキー、取得できない場合は空文字列</returns>
-        public string GetApiKey(ApiProvider provider)
+        public string GetApiKey(ApiProvider provider, string keyId = "default")
         {
             try
             {
@@ -110,20 +109,21 @@ namespace GameTranslationOverlay.Core.Security
                 {
                     _lastError = $"No API keys available for provider: {provider}";
                     Logger.Instance.LogWarning(_lastError);
-                    return string.Empty;
+                    return GetFallbackApiKey(provider, keyId);
                 }
 
-                // アクティブで期限内のキーを取得
+                // 指定されたIDのキーを取得（指定がない場合はdefaultを使用）
                 var activeKeys = _apiKeys[provider]
                     .Where(k => k.IsActive && (!k.Expiration.HasValue || k.Expiration.Value > DateTime.Now))
+                    .Where(k => string.IsNullOrEmpty(keyId) || k.KeyId == keyId)
                     .OrderByDescending(k => k.Created)
                     .ToList();
 
                 if (activeKeys.Count == 0)
                 {
-                    _lastError = $"No active API keys available for provider: {provider}";
+                    _lastError = $"No active API key found for provider: {provider}, keyId: {keyId ?? "default"}";
                     Logger.Instance.LogWarning(_lastError);
-                    return string.Empty;
+                    return GetFallbackApiKey(provider, keyId);
                 }
 
                 // 最新のキーを使用
@@ -141,21 +141,57 @@ namespace GameTranslationOverlay.Core.Security
                         DataProtectionScope.CurrentUser);
 
                     // バイト配列を文字列に変換
-                    return Encoding.UTF8.GetString(decryptedBytes);
+                    string apiKey = Encoding.UTF8.GetString(decryptedBytes);
+
+                    // キーの検証
+                    if (provider == ApiProvider.GoogleGemini && !apiKey.StartsWith("AIza"))
+                    {
+                        _lastError = "Gemini API key format appears to be invalid (should start with 'AIza')";
+                        Logger.Instance.LogWarning(_lastError);
+                        // ログには記録するが、キーは返す（有効な可能性もあるため）
+                    }
+
+                    return apiKey;
                 }
-                catch (Exception ex)
+                catch (FormatException fex)
                 {
-                    _lastError = $"Error decrypting API key: {ex.Message}";
-                    Logger.Instance.LogError(_lastError, ex);
-                    return string.Empty;
+                    _lastError = $"Error decoding Base64 API key: {fex.Message}";
+                    Logger.Instance.LogError(_lastError);
+                    Debug.WriteLine($"Key format error for {provider}: {fex.Message}");
+                    return GetFallbackApiKey(provider, keyId);
+                }
+                catch (CryptographicException cex)
+                {
+                    _lastError = $"Error decrypting API key: {cex.Message}";
+                    Logger.Instance.LogError(_lastError);
+                    Debug.WriteLine($"Decryption error for {provider}: {cex.Message}");
+                    return GetFallbackApiKey(provider, keyId);
                 }
             }
             catch (Exception ex)
             {
                 _lastError = $"Unexpected error in GetApiKey: {ex.Message}";
-                Logger.Instance.LogError(_lastError, ex);
-                return string.Empty;
+                Logger.Instance.LogError(_lastError);
+                Debug.WriteLine($"Unexpected error getting key for {provider}: {ex.Message}");
+                return GetFallbackApiKey(provider, keyId);
             }
+        }
+
+        // フォールバックAPIキーの取得
+        private string GetFallbackApiKey(ApiProvider provider, string keyId = null)
+        {
+            // デバッグモードでのみフォールバックキーを使用
+            if (AppSettings.Instance != null && AppSettings.Instance.DebugModeEnabled)
+            {
+                string keyType = string.IsNullOrEmpty(keyId) || keyId == "default" ? "" : $" ({keyId})";
+                Logger.Instance.LogWarning($"Using development fallback key for {provider}{keyType} in debug mode");
+
+                // デバッグモード用のAPIキー
+                // 実際のAPIキーはここに記述せず、安全な方法で提供する必要があります
+                return "";
+            }
+
+            return string.Empty;
         }
 
         /// <summary>

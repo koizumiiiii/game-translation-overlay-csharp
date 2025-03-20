@@ -149,9 +149,17 @@ namespace GameTranslationOverlay.Core.OCR.AI
 
             try
             {
+                // APIキーのフォーマットを確認（OpenAIのキーはsk-で始まるはず）
+                if (!string.IsNullOrEmpty(apiKey) && !apiKey.StartsWith("sk-"))
+                {
+                    Logger.Instance.LogWarning("OpenAI API key format appears to be invalid (should start with 'sk-')");
+                    Debug.WriteLine("Warning: OpenAI API key format appears to be invalid");
+                }
+
                 _httpClient.DefaultRequestHeaders.Clear();
                 _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
                 _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
 
                 // プロンプトの作成
                 var requestBody = new
@@ -276,9 +284,17 @@ namespace GameTranslationOverlay.Core.OCR.AI
 
             try
             {
+                // APIキーのフォーマットを確認（GeminiのキーはAIzaから始まるはず）
+                if (!string.IsNullOrEmpty(apiKey) && !apiKey.StartsWith("AIza"))
+                {
+                    Logger.Instance.LogWarning("Gemini API key format appears to be invalid (should start with 'AIza')");
+                    Debug.WriteLine("Warning: Gemini API key format appears to be invalid");
+                }
+
                 _httpClient.DefaultRequestHeaders.Clear();
                 _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
+                // 以下、現在のリクエスト作成と送信処理をそのまま使用
                 // プロンプトの作成
                 var requestBody = new
                 {
@@ -292,18 +308,18 @@ namespace GameTranslationOverlay.Core.OCR.AI
                                 new
                                 {
                                     inline_data = new
-                                    {
-                                        mime_type = "image/jpeg",
-                                        data = base64Image
-                                    }
+                                {
+                                    mime_type = "image/jpeg",
+                                    data = base64Image
                                 }
                             }
                         }
-                    },
+                    }
+                },
                     generationConfig = new
                     {
-                        temperature = 0.1,  // 創造性を抑え、より確実な抽出を促進
-                        maxOutputTokens = 1500  // より長い応答を許可
+                        temperature = 0.1,
+                        maxOutputTokens = 1500
                     }
                 };
 

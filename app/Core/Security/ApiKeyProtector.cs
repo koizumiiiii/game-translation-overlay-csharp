@@ -3,12 +3,15 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using GameTranslationOverlay.Properties;
+using GameTranslationOverlay.Core.Diagnostics;
+using GameTranslationOverlay.Core.Configuration;
 
 namespace GameTranslationOverlay.Core.Security
 {
     public class ApiKeyProtector
     {
         private static ApiKeyProtector _instance;
+        private static readonly object _lock = new object();
 
         public static ApiKeyProtector Instance
         {
@@ -16,7 +19,13 @@ namespace GameTranslationOverlay.Core.Security
             {
                 if (_instance == null)
                 {
-                    _instance = new ApiKeyProtector();
+                    lock (_lock)
+                    {
+                        if (_instance == null)
+                        {
+                            _instance = new ApiKeyProtector();
+                        }
+                    }
                 }
                 return _instance;
             }
@@ -39,27 +48,56 @@ namespace GameTranslationOverlay.Core.Security
 
                 if (string.IsNullOrEmpty(encryptedKey))
                 {
-                    Debug.WriteLine("Encrypted API key not found in resources");
+                    string message = "Encrypted API key not found in resources";
+                    Debug.WriteLine(message);
+                    if (Logger.Instance != null)
+                        Logger.Instance.LogWarning(message);
                     return string.Empty;
                 }
 
-                // Base64デコード
-                byte[] encryptedBytes = Convert.FromBase64String(encryptedKey);
+                try
+                {
+                    // Base64デコード
+                    byte[] encryptedBytes = Convert.FromBase64String(encryptedKey);
 
-                // Windows DPAPIを使用して復号化
-                byte[] decryptedBytes = ProtectedData.Unprotect(
-                    encryptedBytes,
-                    null,
-                    DataProtectionScope.CurrentUser);
+                    // Windows DPAPIを使用して復号化
+                    byte[] decryptedBytes = ProtectedData.Unprotect(
+                        encryptedBytes,
+                        null,
+                        DataProtectionScope.CurrentUser);
 
-                // バイト配列を文字列に変換
-                string apiKey = Encoding.UTF8.GetString(decryptedBytes);
+                    // バイト配列を文字列に変換
+                    string apiKey = Encoding.UTF8.GetString(decryptedBytes);
 
-                return apiKey;
+                    // キーが取得できたことをログに記録
+                    Debug.WriteLine("API key successfully decrypted");
+                    return apiKey;
+                }
+                catch (FormatException fex)
+                {
+                    string message = $"Error decoding Base64 API key: {fex.Message}";
+                    Debug.WriteLine(message);
+                    if (Logger.Instance != null)
+                        Logger.Instance.LogError(message);
+
+                    return GetFallbackApiKey("OpenAI");
+                }
+                catch (CryptographicException cex)
+                {
+                    string message = $"Error decrypting API key: {cex.Message}";
+                    Debug.WriteLine(message);
+                    if (Logger.Instance != null)
+                        Logger.Instance.LogError(message);
+
+                    return GetFallbackApiKey("OpenAI");
+                }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error decrypting API key: {ex.Message}");
+                string message = $"Unexpected error retrieving API key: {ex.Message}";
+                Debug.WriteLine(message);
+                if (Logger.Instance != null)
+                    Logger.Instance.LogError(message);
                 return string.Empty;
             }
         }
@@ -90,9 +128,32 @@ namespace GameTranslationOverlay.Core.Security
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error encrypting API key: {ex.Message}");
+                string message = $"Error encrypting API key: {ex.Message}";
+                Debug.WriteLine(message);
+                if (Logger.Instance != null)
+                    Logger.Instance.LogError(message);
                 return string.Empty;
             }
+        }
+
+        /// <summary>
+        /// フォールバックAPIキーの取得
+        /// </summary>
+        private string GetFallbackApiKey(string provider)
+        {
+            // デバッグモードでのみフォールバックキーを使用
+            if (AppSettings.Instance != null && AppSettings.Instance.DebugModeEnabled)
+            {
+                Debug.WriteLine($"Using development fallback key for {provider} in debug mode");
+                if (Logger.Instance != null)
+                    Logger.Instance.LogWarning($"Using development fallback key for {provider} in debug mode");
+
+                // デバッグモード用のAPIキー
+                // 実際のAPIキーはここに記述せず、安全な方法で提供する必要があります
+                return "";
+            }
+
+            return string.Empty;
         }
     }
 }
