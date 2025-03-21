@@ -19,7 +19,7 @@ namespace GameTranslationOverlay.Core.OCR.AI
     {
         private readonly HttpClient _httpClient;
         private const string OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-        private const string GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent";
+        private const string GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent";
         private readonly string _debugDir;
 
         public VisionServiceClient()
@@ -67,15 +67,29 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 if (isJapaneseText)
                 {
                     // 日本語テキストの場合はGPT-4 Visionを使用
-                    // ApiKeyProtectorに必要なメソッドがない場合は一般的なGetDecryptedApiKeyを使用
-                    apiKey = ApiKeyProtector.Instance.GetDecryptedApiKey();
+                    apiKey = ApiKeyProtector.Instance.GetDecryptedApiKey(); // OpenAI用
+
+                    // デバッグ情報の記録（セキュリティのため一部だけ）
+                    if (!string.IsNullOrEmpty(apiKey))
+                    {
+                        string partialKey = apiKey.Length > 5 ? apiKey.Substring(0, 5) + "..." : "empty";
+                        Debug.WriteLine($"Using OpenAI API key: {partialKey}, length: {apiKey.Length}");
+                    }
+
                     return await ExtractTextWithGPT4Vision(image, apiKey);
                 }
                 else
                 {
                     // 非日本語テキストの場合はGemini Pro Visionを使用
-                    // ApiKeyProtectorに必要なメソッドがない場合は一般的なGetDecryptedApiKeyを使用
-                    apiKey = ApiKeyProtector.Instance.GetDecryptedApiKey();
+                    apiKey = ApiKeyProtector.Instance.GetDecryptedGeminiApiKey(); // Gemini用の新メソッド
+
+                    // デバッグ情報の記録（セキュリティのため一部だけ）
+                    if (!string.IsNullOrEmpty(apiKey))
+                    {
+                        string partialKey = apiKey.Length > 5 ? apiKey.Substring(0, 5) + "..." : "empty";
+                        Debug.WriteLine($"Using Gemini API key: {partialKey}, length: {apiKey.Length}");
+                    }
+
                     return await ExtractTextWithGeminiVision(image, apiKey);
                 }
             }
@@ -287,9 +301,14 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 // APIキーのフォーマットを確認（GeminiのキーはAIzaから始まるはず）
                 if (!string.IsNullOrEmpty(apiKey) && !apiKey.StartsWith("AIza"))
                 {
-                    Logger.Instance.LogWarning("Gemini API key format appears to be invalid (should start with 'AIza')");
-                    Debug.WriteLine("Warning: Gemini API key format appears to be invalid");
+                    string warningMessage = "Gemini API key format appears to be invalid (should start with 'AIza')";
+                    Logger.Instance.LogWarning(warningMessage);
+                    Debug.WriteLine(warningMessage);
+
+                    // APIキーの長さを出力（セキュリティのため内容は出力しない）
+                    Debug.WriteLine($"Key length: {apiKey.Length}, First 4 chars: {(apiKey.Length >= 4 ? apiKey.Substring(0, 4) : "less than 4 chars")}");
                 }
+
 
                 _httpClient.DefaultRequestHeaders.Clear();
                 _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -302,20 +321,21 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     {
                         new
                         {
+                            role = "user", // role フィールドの追加
                             parts = new object[]
                             {
                                 new { text = "Extract all visible text from this game screenshot. For each text element, provide the exact text content and its position (x, y, width, height) in the image. Format as JSON with an array of text regions. Be extremely accurate with the text content." },
                                 new
                                 {
                                     inline_data = new
-                                {
-                                    mime_type = "image/jpeg",
-                                    data = base64Image
+                                    {
+                                        mime_type = "image/jpeg",
+                                        data = base64Image
+                                    }
                                 }
                             }
                         }
-                    }
-                },
+                    },
                     generationConfig = new
                     {
                         temperature = 0.1,

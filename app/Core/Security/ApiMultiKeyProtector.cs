@@ -105,12 +105,17 @@ namespace GameTranslationOverlay.Core.Security
         {
             try
             {
+                Debug.WriteLine($"GetApiKey called for provider: {provider}, keyId: {keyId ?? "default"}");
+
                 if (!_apiKeys.ContainsKey(provider) || _apiKeys[provider].Count == 0)
                 {
                     _lastError = $"No API keys available for provider: {provider}";
                     Logger.Instance.LogWarning(_lastError);
+                    Debug.WriteLine($"No API keys available for provider: {provider}");
                     return GetFallbackApiKey(provider, keyId);
                 }
+
+                Debug.WriteLine($"Total keys for {provider}: {_apiKeys[provider].Count}");
 
                 // 指定されたIDのキーを取得（指定がない場合はdefaultを使用）
                 var activeKeys = _apiKeys[provider]
@@ -119,36 +124,58 @@ namespace GameTranslationOverlay.Core.Security
                     .OrderByDescending(k => k.Created)
                     .ToList();
 
+                Debug.WriteLine($"Found {activeKeys.Count} active keys for provider: {provider}, keyId: {keyId ?? "default"}");
+
                 if (activeKeys.Count == 0)
                 {
                     _lastError = $"No active API key found for provider: {provider}, keyId: {keyId ?? "default"}";
                     Logger.Instance.LogWarning(_lastError);
+                    Debug.WriteLine(_lastError);
                     return GetFallbackApiKey(provider, keyId);
                 }
 
                 // 最新のキーを使用
                 var keyInfo = activeKeys.First();
+                Debug.WriteLine($"Using key with ID: {keyInfo.KeyId}, created: {keyInfo.Created}");
 
                 try
                 {
                     // Base64デコード
+                    Debug.WriteLine($"Attempting to decode Base64 string, length: {keyInfo.EncryptedKey?.Length ?? 0}");
                     byte[] encryptedBytes = Convert.FromBase64String(keyInfo.EncryptedKey);
+                    Debug.WriteLine($"Base64 decoded {provider} key, size: {encryptedBytes.Length} bytes");
 
                     // Windows DPAPIを使用して復号化
+                    Debug.WriteLine($"Attempting to decrypt {provider} key using DPAPI with scope: LocalMachine");
+                    Debug.WriteLine($"Current user: {Environment.UserName}, machine: {Environment.MachineName}");
+
                     byte[] decryptedBytes = ProtectedData.Unprotect(
                         encryptedBytes,
                         null,
-                        DataProtectionScope.CurrentUser);
+                        DataProtectionScope.LocalMachine);
+
+                    Debug.WriteLine($"Successfully decrypted {provider} key, size: {decryptedBytes.Length} bytes");
 
                     // バイト配列を文字列に変換
                     string apiKey = Encoding.UTF8.GetString(decryptedBytes);
+                    Debug.WriteLine($"Converted {provider} key to string, length: {apiKey.Length}");
+
+                    if (apiKey.Length > 0)
+                    {
+                        // キーの先頭5文字を表示（セキュリティの観点から全体は表示しない）
+                        string prefix = apiKey.Length > 5 ? apiKey.Substring(0, 5) : apiKey;
+                        Debug.WriteLine($"Key prefix: {prefix}...");
+                    }
 
                     // キーの検証
-                    if (provider == ApiProvider.GoogleGemini && !apiKey.StartsWith("AIza"))
+                    bool isValidFormat = ValidateApiKeyFormat(provider, apiKey);
+                    Debug.WriteLine($"{provider} key format validation: {(isValidFormat ? "PASSED" : "FAILED")}");
+
+                    if (!isValidFormat)
                     {
-                        _lastError = "Gemini API key format appears to be invalid (should start with 'AIza')";
+                        _lastError = $"{provider} API key format is invalid";
                         Logger.Instance.LogWarning(_lastError);
-                        // ログには記録するが、キーは返す（有効な可能性もあるため）
+                        // ログには記録するが、フォールバックは呼び出さない（有効な可能性もあるため）
                     }
 
                     return apiKey;
@@ -157,14 +184,24 @@ namespace GameTranslationOverlay.Core.Security
                 {
                     _lastError = $"Error decoding Base64 API key: {fex.Message}";
                     Logger.Instance.LogError(_lastError);
-                    Debug.WriteLine($"Key format error for {provider}: {fex.Message}");
+                    Debug.WriteLine($"KEY FORMAT ERROR for {provider}: {fex.GetType().Name}: {fex.Message}");
+                    Debug.WriteLine($"Stack trace: {fex.StackTrace}");
                     return GetFallbackApiKey(provider, keyId);
                 }
                 catch (CryptographicException cex)
                 {
                     _lastError = $"Error decrypting API key: {cex.Message}";
                     Logger.Instance.LogError(_lastError);
-                    Debug.WriteLine($"Decryption error for {provider}: {cex.Message}");
+                    Debug.WriteLine($"CRYPTOGRAPHY ERROR for {provider}: {cex.GetType().Name}: {cex.Message}");
+                    Debug.WriteLine($"Stack trace: {cex.StackTrace}");
+                    return GetFallbackApiKey(provider, keyId);
+                }
+                catch (Exception ex)
+                {
+                    _lastError = $"Error processing API key: {ex.Message}";
+                    Logger.Instance.LogError(_lastError);
+                    Debug.WriteLine($"UNEXPECTED ERROR in key processing for {provider}: {ex.GetType().Name}: {ex.Message}");
+                    Debug.WriteLine($"Stack trace: {ex.StackTrace}");
                     return GetFallbackApiKey(provider, keyId);
                 }
             }
@@ -172,7 +209,8 @@ namespace GameTranslationOverlay.Core.Security
             {
                 _lastError = $"Unexpected error in GetApiKey: {ex.Message}";
                 Logger.Instance.LogError(_lastError);
-                Debug.WriteLine($"Unexpected error getting key for {provider}: {ex.Message}");
+                Debug.WriteLine($"CRITICAL ERROR in GetApiKey for {provider}: {ex.GetType().Name}: {ex.Message}");
+                Debug.WriteLine($"Stack trace: {ex.StackTrace}");
                 return GetFallbackApiKey(provider, keyId);
             }
         }
@@ -186,9 +224,15 @@ namespace GameTranslationOverlay.Core.Security
                 string keyType = string.IsNullOrEmpty(keyId) || keyId == "default" ? "" : $" ({keyId})";
                 Logger.Instance.LogWarning($"Using development fallback key for {provider}{keyType} in debug mode");
 
-                // デバッグモード用のAPIキー
-                // 実際のAPIキーはここに記述せず、安全な方法で提供する必要があります
-                return "";
+                // プロバイダーに応じた適切なフォーマットのダミーキーを返す
+                if (provider == ApiProvider.OpenAI)
+                {
+                    return "sk-test-openai-key-for-debugging-purposes-only";
+                }
+                else if (provider == ApiProvider.GoogleGemini)
+                {
+                    return "AIzaSyD_test_gemini_key_for_debugging_purposes_only";
+                }
             }
 
             return string.Empty;
@@ -309,6 +353,42 @@ namespace GameTranslationOverlay.Core.Security
                 _lastError = $"Error updating API key: {ex.Message}";
                 Logger.Instance.LogError(_lastError, ex);
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// APIキーの形式を検証する
+        /// </summary>
+        private bool ValidateApiKeyFormat(ApiProvider provider, string apiKey)
+        {
+            if (string.IsNullOrEmpty(apiKey))
+                return false;
+
+            switch (provider)
+            {
+                case ApiProvider.OpenAI:
+                    // OpenAI APIキーは "sk-" で始まる
+                    bool isOpenAiValid = apiKey.StartsWith("sk-");
+                    if (!isOpenAiValid)
+                    {
+                        Debug.WriteLine("OpenAI API key format validation failed (should start with 'sk-')");
+                        Logger.Instance.LogWarning("OpenAI API key format appears to be invalid");
+                    }
+                    return isOpenAiValid;
+
+                case ApiProvider.GoogleGemini:
+                    // Gemini APIキーは "AIza" で始まる
+                    bool isGeminiValid = apiKey.StartsWith("AIza");
+                    if (!isGeminiValid)
+                    {
+                        Debug.WriteLine("Gemini API key format validation failed (should start with 'AIza')");
+                        Logger.Instance.LogWarning("Gemini API key format appears to be invalid");
+                    }
+                    return isGeminiValid;
+
+                default:
+                    // その他のプロバイダーは検証しない
+                    return true;
             }
         }
 
@@ -569,9 +649,9 @@ namespace GameTranslationOverlay.Core.Security
 
                 // Windows DPAPIを使用して暗号化
                 byte[] encryptedData = ProtectedData.Protect(
-                    dataToEncrypt,
-                    null,
-                    DataProtectionScope.CurrentUser);
+                dataToEncrypt,
+                null,
+                DataProtectionScope.LocalMachine);
 
                 // Base64エンコード
                 return Convert.ToBase64String(encryptedData);
@@ -639,70 +719,146 @@ namespace GameTranslationOverlay.Core.Security
         /// <summary>
         /// キー情報を読み込み
         /// </summary>
+        /// <summary>
+        /// キー情報を読み込み
+        /// </summary>
         private void LoadKeys()
         {
             try
             {
+                Debug.WriteLine("LoadKeys method called");
+
                 if (!File.Exists(_keysFilePath))
                 {
+                    Debug.WriteLine($"API keys file does not exist at path: {_keysFilePath}");
                     Logger.Instance.LogInfo("API keys file does not exist, using defaults only");
                     return;
                 }
 
+                Debug.WriteLine($"Loading API keys from file: {_keysFilePath}");
+
                 // ファイルから暗号化されたデータを読み込み
                 byte[] encryptedData = File.ReadAllBytes(_keysFilePath);
+                Debug.WriteLine($"Read {encryptedData.Length} bytes of encrypted data from file");
 
                 // 復号化
-                byte[] decryptedData = ProtectedData.Unprotect(
-                    encryptedData,
-                    null,
-                    DataProtectionScope.CurrentUser);
+                Debug.WriteLine("Attempting to decrypt API keys data with LocalMachine scope");
+                Debug.WriteLine($"Current user: {Environment.UserName}, machine: {Environment.MachineName}");
+
+                byte[] decryptedData;
+                try
+                {
+                    decryptedData = ProtectedData.Unprotect(
+                        encryptedData,
+                        null,
+                        DataProtectionScope.LocalMachine);
+
+                    Debug.WriteLine($"Successfully decrypted data, size: {decryptedData.Length} bytes");
+                }
+                catch (CryptographicException cex)
+                {
+                    Debug.WriteLine($"CRYPTOGRAPHY ERROR during keys file decryption: {cex.GetType().Name}: {cex.Message}");
+                    Debug.WriteLine($"Stack trace: {cex.StackTrace}");
+                    Logger.Instance.LogError($"Failed to decrypt API keys file: {cex.Message}");
+
+                    // 失敗した場合、CurrentUserスコープでも試みる（移行期間中の互換性のため）
+                    Debug.WriteLine("Attempting fallback decryption with CurrentUser scope");
+                    try
+                    {
+                        decryptedData = ProtectedData.Unprotect(
+                            encryptedData,
+                            null,
+                            DataProtectionScope.CurrentUser);
+
+                        Debug.WriteLine("Successfully decrypted data with CurrentUser scope");
+                        Logger.Instance.LogWarning("API keys file was encrypted with CurrentUser scope, will be upgraded to LocalMachine on next save");
+                    }
+                    catch (Exception ex2)
+                    {
+                        Debug.WriteLine($"FALLBACK DECRYPTION FAILED: {ex2.GetType().Name}: {ex2.Message}");
+                        throw; // 再度例外をスロー
+                    }
+                }
 
                 // JSON文字列に変換
                 string json = Encoding.UTF8.GetString(decryptedData);
+                Debug.WriteLine($"Decoded JSON string, length: {json.Length} characters");
 
                 // デシリアライズ
+                Debug.WriteLine("Deserializing API keys data");
                 var serializedData = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, System.Text.Json.JsonElement>>(json);
+                Debug.WriteLine($"Deserialized {serializedData.Count} provider entries");
 
                 foreach (var providerPair in serializedData)
                 {
+                    Debug.WriteLine($"Processing provider: {providerPair.Key}");
+
                     // プロバイダー名を列挙型に変換
                     if (Enum.TryParse<ApiProvider>(providerPair.Key, out var provider))
                     {
                         var keyInfoList = new List<ApiKeyInfo>();
+                        int keyCount = 0;
 
-                        foreach (var keyInfoElement in providerPair.Value.EnumerateArray())
+                        try
                         {
-                            var keyInfo = new ApiKeyInfo
+                            foreach (var keyInfoElement in providerPair.Value.EnumerateArray())
                             {
-                                EncryptedKey = keyInfoElement.GetProperty("EncryptedKey").GetString(),
-                                Created = DateTime.Parse(keyInfoElement.GetProperty("Created").GetString()),
-                                IsActive = keyInfoElement.GetProperty("IsActive").GetBoolean(),
-                                KeyId = keyInfoElement.GetProperty("KeyId").GetString()
-                            };
+                                keyCount++;
+                                Debug.WriteLine($"  Processing key #{keyCount}");
 
-                            // 有効期限（オプション）
-                            if (keyInfoElement.TryGetProperty("Expiration", out var expirationElement) &&
-                                !expirationElement.ValueKind.HasFlag(System.Text.Json.JsonValueKind.Null))
-                            {
-                                keyInfo.Expiration = DateTime.Parse(expirationElement.GetString());
+                                var keyInfo = new ApiKeyInfo
+                                {
+                                    EncryptedKey = keyInfoElement.GetProperty("EncryptedKey").GetString(),
+                                    Created = DateTime.Parse(keyInfoElement.GetProperty("Created").GetString()),
+                                    IsActive = keyInfoElement.GetProperty("IsActive").GetBoolean(),
+                                    KeyId = keyInfoElement.GetProperty("KeyId").GetString()
+                                };
+
+                                Debug.WriteLine($"  Key ID: {keyInfo.KeyId}, Created: {keyInfo.Created}, Active: {keyInfo.IsActive}");
+
+                                // 有効期限（オプション）
+                                if (keyInfoElement.TryGetProperty("Expiration", out var expirationElement) &&
+                                    !expirationElement.ValueKind.HasFlag(System.Text.Json.JsonValueKind.Null))
+                                {
+                                    keyInfo.Expiration = DateTime.Parse(expirationElement.GetString());
+                                    Debug.WriteLine($"  Expiration: {keyInfo.Expiration}");
+                                }
+                                else
+                                {
+                                    Debug.WriteLine("  No expiration date");
+                                }
+
+                                keyInfoList.Add(keyInfo);
                             }
 
-                            keyInfoList.Add(keyInfo);
+                            Debug.WriteLine($"Added {keyInfoList.Count} keys for provider {provider}");
+                            _apiKeys[provider] = keyInfoList;
                         }
-
-                        _apiKeys[provider] = keyInfoList;
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"ERROR processing keys for provider {provider}: {ex.GetType().Name}: {ex.Message}");
+                            Logger.Instance.LogError($"Error processing keys for provider {provider}: {ex.Message}");
+                        }
+                    }
+                    else
+                    {
+                        Debug.WriteLine($"Unknown provider name: {providerPair.Key}");
+                        Logger.Instance.LogWarning($"Unknown provider name in API keys file: {providerPair.Key}");
                     }
                 }
 
+                Debug.WriteLine($"Successfully loaded API keys for {_apiKeys.Count} providers");
                 Logger.Instance.LogInfo("Loaded API keys from file");
             }
             catch (Exception ex)
             {
                 _lastError = $"Error loading API keys: {ex.Message}";
+                Debug.WriteLine($"CRITICAL ERROR loading API keys: {ex.GetType().Name}: {ex.Message}");
+                Debug.WriteLine($"Stack trace: {ex.StackTrace}");
                 Logger.Instance.LogError(_lastError, ex);
 
                 // 読み込みに失敗した場合はデフォルト値のみを使用
+                Debug.WriteLine("Using default API keys only due to load error");
                 Logger.Instance.LogWarning("Using default API keys only due to load error");
             }
         }
