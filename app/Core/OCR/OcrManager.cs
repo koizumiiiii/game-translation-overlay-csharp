@@ -6,6 +6,9 @@ using System.Threading.Tasks;
 using System.Linq;
 using GameTranslationOverlay.Core.Utils;
 using GameTranslationOverlay.Core.Configuration;
+using GameTranslationOverlay.Core.Diagnostics;
+using Windows.Media.Ocr;
+using GameTranslationOverlay.Core.OCR.AI;
 
 namespace GameTranslationOverlay.Core.OCR
 {
@@ -50,6 +53,10 @@ namespace GameTranslationOverlay.Core.OCR
         private string _currentGameTitle = string.Empty;
         private GameProfiles _gameProfiles = null;
 
+        private bool _isProcessing = false;
+        private DateTime _processingStartTime;
+        private readonly int _processingTimeoutMs = 10000; // 10秒タイムアウト
+
         /// <summary>
         /// コンストラクタ
         /// </summary>
@@ -92,110 +99,41 @@ namespace GameTranslationOverlay.Core.OCR
         /// <returns>検出されたテキスト領域のリスト</returns>
         public async Task<List<TextRegion>> DetectTextRegionsAsync(Bitmap image)
         {
-            // 破棄済みのチェック
-            if (_isDisposed)
+            // タイムアウト判定
+            if (_isProcessing && (DateTime.Now - _processingStartTime).TotalMilliseconds > _processingTimeoutMs)
             {
-                Debug.WriteLine("OCR: マネージャーは既に破棄されています");
+                Logger.Instance.LogWarning("OcrManager", "OCR処理タイムアウトのためリセットします");
+                _isProcessing = false;
+            }
+
+            if (_isProcessing)
+            {
+                Logger.Instance.LogDebug("OcrManager", "前回の処理が完了していないため、処理をスキップします");
                 return new List<TextRegion>();
             }
-
-            // メモリ使用量をチェック
-            MemoryManagement.CheckMemoryUsage();
-
-            // 並行処理のチェック
-            if (_processingActive)
-            {
-                Debug.WriteLine("OCR: 前回の処理が完了していないため、処理をスキップします");
-                return new List<TextRegion>();
-            }
-
-            if (image == null)
-            {
-                Debug.WriteLine("OCR: 入力画像がnullです");
-                return new List<TextRegion>();
-            }
-
-            _processingActive = true;
-            _stopwatch.Restart();
-
-            // キャッシュのクリーンアップ（定期的）
-            if ((DateTime.Now - _lastCacheCleanupTime).TotalSeconds > 60)
-            {
-                CleanupCache();
-                _lastCacheCleanupTime = DateTime.Now;
-            }
-
-            // 画像のハッシュコードを計算（キャッシュに使用）
-            int imageHash = CalculateImageHash(image);
 
             try
             {
-                // キャッシュをチェック
-                if (_ocrCache.TryGetValue(imageHash, out var cachedRegions))
-                {
-                    _processingActive = false;
-                    Debug.WriteLine($"OCR: キャッシュから{cachedRegions.Count}個のテキスト領域を取得");
-                    return cachedRegions;
-                }
+                _isProcessing = true;
+                _processingStartTime = DateTime.Now;
 
-                List<TextRegion> regions = new List<TextRegion>();
+                Logger.Instance.LogDebug("OcrManager", "OCR処理開始");
 
-                if (_useProgressiveScan)
-                {
-                    // 段階的スキャン（複数の閾値・設定で試行）
-                    regions = await ScanWithMultipleSettingsAsync(image);
-                }
-                else
-                {
-                    // 通常の単一スキャン
-                    regions = await ScanWithCurrentSettingsAsync(image);
-                }
+                // 実際のOCR処理
+                var result = await _paddleOcrEngine.DetectTextRegionsAsync(image);
 
-                // 結果をフィルタリング（信頼度閾値に基づく）
-                regions = FilterByConfidence(regions);
-
-                // 結果に基づいて設定を調整
-                if (_useAdaptiveMode)
-                {
-                    _adaptivePreprocessor.AdjustSettings(regions.Count);
-                }
-
-                // 結果をキャッシュに追加
-                if (regions.Count > 0)
-                {
-                    AddToCache(imageHash, regions);
-                }
-
-                // 連続エラーカウンターをリセット
-                _consecutiveErrors = 0;
-
-                // パフォーマンス計測
-                _stopwatch.Stop();
-                RecordProcessingTime(_stopwatch.ElapsedMilliseconds);
-
-                Debug.WriteLine($"OCR: {regions.Count}個のテキスト領域を検出（処理時間: {_stopwatch.ElapsedMilliseconds}ms）");
-
-                return regions;
+                Logger.Instance.LogDebug("OcrManager", $"OCR処理完了: {result.Count}個のテキスト領域を検出");
+                return result;
             }
             catch (Exception ex)
             {
-                _stopwatch.Stop();
-                _consecutiveErrors++;
-                Debug.WriteLine($"OCR: テキスト領域検出エラー: {ex.Message}");
-
-                // 連続エラーが多い場合、リソースをクリーンアップ
-                if (_consecutiveErrors >= MAX_CONSECUTIVE_ERRORS)
-                {
-                    Debug.WriteLine($"OCR: 連続エラーが{MAX_CONSECUTIVE_ERRORS}回発生したため、リソースをクリーンアップします");
-                    CleanupResources();
-                    _consecutiveErrors = 0;
-                }
-
+                Logger.Instance.LogError("OcrManager", "OCR処理中にエラーが発生しました: " + ex.Message, ex);
                 return new List<TextRegion>();
             }
             finally
             {
-                _processingActive = false;
+                // 必ずフラグをリセット
+                _isProcessing = false;
             }
         }
 
@@ -713,8 +651,51 @@ namespace GameTranslationOverlay.Core.OCR
         /// </summary>
         public void Dispose()
         {
-            Dispose(true);
-            GC.SuppressFinalize(this);
+            if (_isDisposed)
+                return;
+
+            try
+            {
+                Dispose(true);
+                GC.SuppressFinalize(this);
+
+                // フラグのリセット
+                _isProcessing = false;
+
+                Logger.Instance.LogDebug("OcrManager", "OcrManagerが正常に破棄されました");
+            }
+            catch (Exception ex)
+            {
+                Logger.Instance.LogError("OcrManager破棄中にエラーが発生: " + ex.Message, ex);
+            }
+            finally
+            {
+                _isDisposed = true;
+            }
+        }
+
+        // AIで最適化された設定適用のログの強化
+        public void ApplySettings(OcrOptimalSettings settings)
+        {
+            if (settings == null)
+            {
+                Logger.Instance.LogWarning("OcrManager", "null設定が適用されようとしました");
+                return;
+            }
+
+            // ConfidenceThresholdはプロパティではなくメソッドで設定
+            this.SetConfidenceThreshold(settings.ConfidenceThreshold);
+
+            // 前処理設定の適用
+            var preprocessingOptions = settings.ToPreprocessingOptions();
+            this.SetPreprocessingOptions(preprocessingOptions);
+
+            // 設定適用のログ出力
+            Logger.Instance.LogInfo("OcrManager",
+                $"OCR設定を適用: 信頼度={settings.ConfidenceThreshold:F2}, " +
+                $"コントラスト={preprocessingOptions.ContrastLevel:F2}, " +
+                $"明るさ={preprocessingOptions.BrightnessLevel:F2}, " +
+                $"シャープネス={preprocessingOptions.SharpnessLevel:F2}");
         }
 
         /// <summary>

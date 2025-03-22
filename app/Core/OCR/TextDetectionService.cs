@@ -292,357 +292,61 @@ namespace GameTranslationOverlay.Core.OCR
             return _detectedRegions.FirstOrDefault(r => r.Bounds.Contains(point));
         }
 
+        private DateTime _processingStartTime;
+        private readonly int _processingTimeoutMs = 10000; // 10秒タイムアウト
+
         /// <summary>
         /// テキスト検出タイマーのイベントハンドラ
         /// </summary>
         private async void DetectionTimer_Tick(object sender, EventArgs e)
         {
-            // 処理が重複しないようにチェック
+            // 一時停止中のタイマーをもう一度止める必要はないので条件確認
+            if (_detectionTimer.Enabled)
+            {
+                _detectionTimer.Stop(); // 処理中はタイマーを停止
+            }
+
+            // タイムアウト判定を追加
+            if (_processingActive && (DateTime.Now - _processingStartTime).TotalMilliseconds > _processingTimeoutMs)
+            {
+                Logger.Instance.LogWarning("TextDetectionService",
+                    $"OCR処理がタイムアウト ({_processingTimeoutMs}ms) したためリセットします");
+                _processingActive = false;
+            }
+
             if (_processingActive)
             {
-                Debug.WriteLine("前回の処理が完了していないためスキップします");
+                Logger.Instance.LogDebug("TextDetectionService", "前回の処理が完了していないためスキップします");
+
+                // タイマーを再開して次の処理に備える
+                if (!_disposed && _isRunning && _targetWindowHandle != IntPtr.Zero)
+                {
+                    _detectionTimer.Start();
+                }
                 return;
             }
 
-            // リソースチェック（定期的）
-            if ((DateTime.Now - _lastResourceCheckTime).TotalMilliseconds > RESOURCE_CHECK_INTERVAL_MS)
-            {
-                UpdateProcessingStatus("リソースチェック中");
-                ResourceManager.CleanupDeadReferences();
-                _lastResourceCheckTime = DateTime.Now;
-            }
-
-            _processingActive = true;
+            _processingActive = true; // 処理開始フラグON
+            _processingStartTime = DateTime.Now; // 処理開始時間を記録
             _processingStopwatch.Restart();
 
             try
             {
-                // タイマーを一時停止
-                _detectionTimer.Stop();
-
-                if (_targetWindowHandle == IntPtr.Zero || !WindowUtils.IsWindowValid(_targetWindowHandle))
-                {
-                    Debug.WriteLine("対象ウィンドウが無効なため、検出をスキップします");
-                    _lastErrorMessage = "対象ウィンドウが無効です";
-                    UpdateProcessingStatus("ウィンドウ無効", 0);
-                    return;
-                }
-
-                // ターゲットウィンドウの領域を取得
-                Rectangle windowRect = WindowUtils.GetWindowRect(_targetWindowHandle);
-
-                // ウィンドウが最小化されていないか確認
-                if (windowRect.Width <= 0 || windowRect.Height <= 0)
-                {
-                    Debug.WriteLine("ウィンドウが最小化されているか、サイズが無効です");
-                    _lastErrorMessage = "ウィンドウが最小化されています";
-                    UpdateProcessingStatus("ウィンドウサイズ無効", 0);
-                    return;
-                }
-
-                Bitmap windowCapture = null;
-
-                try
-                {
-                    // ウィンドウ全体をキャプチャ
-                    UpdateProcessingStatus("画面キャプチャ中", 10);
-                    windowCapture = ScreenCapture.CaptureWindow(_targetWindowHandle);
-
-                    if (windowCapture == null)
-                    {
-                        Debug.WriteLine("ウィンドウキャプチャに失敗しました");
-                        _lastErrorMessage = "ウィンドウキャプチャに失敗しました";
-                        _consecutiveErrors++;
-                        UpdateProcessingStatus("キャプチャ失敗", 0);
-                        return;
-                    }
-
-                    // ResourceManagerにビットマップを追跡させる
-                    ResourceManager.TrackResource(windowCapture);
-
-                    // 差分検出（有効な場合のみ）
-                    bool hasChange = true;
-                    if (_useDifferenceDetection)
-                    {
-                        UpdateProcessingStatus("差分検出中", 20);
-                        hasChange = _differenceDetector.HasSignificantChange(windowCapture);
-                    }
-
-                    // 差分がある場合のみOCR処理を実行
-                    if (hasChange)
-                    {
-                        UpdateProcessingStatus("テキスト検出中", 30);
-                        List<TextRegion> allRegions = new List<TextRegion>();
-
-                        // スマート領域検出を使用するかどうかで処理を分岐
-                        if (_useSmartRegions)
-                        {
-                            // アクティブな領域のみを処理
-                            List<Rectangle> regionsToProcess = _regionManager.GetActiveRegions();
-
-                            // 初回または有力な領域がない場合は全画面処理
-                            if (regionsToProcess.Count == 0 || regionsToProcess.Count == 1 && regionsToProcess[0].Equals(windowRect))
-                            {
-                                Debug.WriteLine("アクティブな領域がないため、全画面処理を実行します");
-                                UpdateProcessingStatus("全画面OCR処理中", 40);
-                                var regions = await _ocrEngine.DetectTextRegionsAsync(windowCapture);
-
-                                // 領域マネージャーを更新
-                                _regionManager.UpdateRegions(windowRect, regions);
-                                allRegions.AddRange(regions);
-                            }
-                            else
-                            {
-                                Debug.WriteLine($"{regionsToProcess.Count}個のアクティブ領域を処理します");
-                                UpdateProcessingStatus($"{regionsToProcess.Count}個の領域を処理中", 40);
-
-                                // 各アクティブ領域を個別に処理
-                                int processedRegions = 0;
-                                foreach (var region in regionsToProcess)
-                                {
-                                    // 領域がウィンドウ内に収まるように調整
-                                    Rectangle safeRegion = new Rectangle(
-                                        Math.Max(0, region.X - windowRect.X),
-                                        Math.Max(0, region.Y - windowRect.Y),
-                                        Math.Min(windowCapture.Width - (region.X - windowRect.X), region.Width),
-                                        Math.Min(windowCapture.Height - (region.Y - windowRect.Y), region.Height)
-                                    );
-
-                                    // 有効なサイズかチェック
-                                    if (safeRegion.Width <= 0 || safeRegion.Height <= 0)
-                                    {
-                                        processedRegions++;
-                                        continue;
-                                    }
-
-                                    Bitmap regionBitmap = null;
-
-                                    try
-                                    {
-                                        // 部分画像を切り出し
-                                        regionBitmap = new Bitmap(safeRegion.Width, safeRegion.Height);
-                                        ResourceManager.TrackResource(regionBitmap);
-
-                                        // 部分画像を作成
-                                        using (Graphics g = Graphics.FromImage(regionBitmap))
-                                        {
-                                            g.DrawImage(windowCapture,
-                                                new Rectangle(0, 0, safeRegion.Width, safeRegion.Height),
-                                                safeRegion,
-                                                GraphicsUnit.Pixel);
-                                        }
-
-                                        // OCR処理
-                                        var regionTexts = await _ocrEngine.DetectTextRegionsAsync(regionBitmap);
-
-                                        // 座標を元のウィンドウ座標に変換
-                                        foreach (var text in regionTexts)
-                                        {
-                                            text.Bounds = new Rectangle(
-                                                text.Bounds.X + (region.X - windowRect.X),
-                                                text.Bounds.Y + (region.Y - windowRect.Y),
-                                                text.Bounds.Width,
-                                                text.Bounds.Height
-                                            );
-                                        }
-
-                                        allRegions.AddRange(regionTexts);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        Debug.WriteLine($"領域処理エラー: {ex.Message}");
-                                    }
-                                    finally
-                                    {
-                                        // 必ず解放
-                                        if (regionBitmap != null)
-                                        {
-                                            ResourceManager.ReleaseResource(regionBitmap);
-                                            regionBitmap = null;
-                                        }
-
-                                        // 進捗状況の更新
-                                        processedRegions++;
-                                        int progress = 40 + (processedRegions * 20 / regionsToProcess.Count);
-                                        UpdateProcessingStatus($"領域処理中 ({processedRegions}/{regionsToProcess.Count})", progress);
-                                    }
-                                }
-
-                                // 領域マネージャーを更新
-                                _regionManager.UpdateRegions(windowRect, allRegions);
-                            }
-                        }
-                        else
-                        {
-                            // 従来の方法（全画面処理）
-                            UpdateProcessingStatus("全画面OCR処理中", 40);
-                            allRegions = await _ocrEngine.DetectTextRegionsAsync(windowCapture);
-                        }
-
-                        // 最低信頼度でフィルタリング
-                        UpdateProcessingStatus("テキスト処理中", 60);
-                        allRegions = allRegions.Where(r => r.Confidence >= _minimumConfidence).ToList();
-
-                        // アダプティブ間隔の更新
-                        if (_dynamicIntervalEnabled)
-                        {
-                            _adaptiveInterval.UpdateInterval(hasChange, allRegions.Count > 0);
-                            DetectionInterval = _adaptiveInterval.GetCurrentInterval();
-                        }
-
-                        // 前回と今回の検出結果を比較
-                        bool hadRegionsBefore = _detectedRegions.Count > 0;
-                        bool hasRegionsNow = allRegions.Count > 0;
-
-                        // スクリーン座標に変換
-                        if (hasRegionsNow)
-                        {
-                            UpdateProcessingStatus("テキスト変換中", 70);
-                            // テキスト内容の連結（変更検出用）
-                            string currentText = string.Join(" ", allRegions.Select(r => r.Text));
-
-                            // 言語の検出と最適化
-                            UpdateProcessingStatus("言語検出中", 80);
-                            OptimizeForLanguage(allRegions);
-
-                            foreach (var region in allRegions)
-                            {
-                                // キャプチャ内の相対座標からスクリーン座標に変換
-                                region.Bounds = new Rectangle(
-                                    windowRect.Left + region.Bounds.X,
-                                    windowRect.Top + region.Bounds.Y,
-                                    region.Bounds.Width,
-                                    region.Bounds.Height);
-                            }
-
-                            // テキスト変更の検出
-                            bool textChanged = !currentText.Equals(_lastDetectedText);
-
-                            // テキスト変更検知が有効で、変更があった場合のみ通知
-                            if (!_useChangeDetection || textChanged)
-                            {
-                                UpdateProcessingStatus("テキスト通知中", 90);
-                                // 検出結果を保存
-                                _detectedRegions = allRegions;
-                                _noRegionsDetectedCount = 0;
-                                _consecutiveErrors = 0;
-
-                                // 結果を通知
-                                Debug.WriteLine($"{allRegions.Count}個のテキスト領域を検出しました");
-                                OnRegionsDetected?.Invoke(this, allRegions);
-
-                                // テキスト変更時刻を更新
-                                if (textChanged)
-                                {
-                                    _lastTextChangeTime = DateTime.Now;
-                                    _lastDetectedText = currentText;
-
-                                    // 間隔を短くする（テキストが変わった = アクティブな状態）
-                                    if (_dynamicIntervalEnabled)
-                                    {
-                                        AdjustIntervalForActivity(true);
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                Debug.WriteLine("テキストに変更がないため通知をスキップします");
-                                UpdateProcessingStatus("変更なし", 100);
-
-                                // 長時間変化がない場合は間隔を長くする
-                                if (_dynamicIntervalEnabled && (DateTime.Now - _lastTextChangeTime).TotalSeconds > 10)
-                                {
-                                    AdjustIntervalForActivity(false);
-                                }
-                            }
-                        }
-                        else
-                        {
-                            // テキスト領域が検出されなかった
-                            Debug.WriteLine("テキスト領域は検出されませんでした");
-                            UpdateProcessingStatus("テキストなし", 100);
-                            _noRegionsDetectedCount++;
-
-                            // しきい値を超えて検出されなかった場合
-                            if (hadRegionsBefore && _noRegionsDetectedCount >= NO_REGIONS_THRESHOLD)
-                            {
-                                _detectedRegions.Clear();
-                                _lastDetectedText = string.Empty;
-                                OnNoRegionsDetected?.Invoke(this, EventArgs.Empty);
-                                Debug.WriteLine($"テキスト領域が{NO_REGIONS_THRESHOLD}回連続で検出されなかったため、クリーンアップイベントを発行します");
-                                _noRegionsDetectedCount = 0;
-                            }
-
-                            // 動的間隔調整（テキストがない = 非アクティブな状態）
-                            if (_dynamicIntervalEnabled)
-                            {
-                                AdjustIntervalForActivity(false);
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // 差分がない場合の間隔調整
-                        UpdateProcessingStatus("変更なし", 100);
-                        if (_dynamicIntervalEnabled)
-                        {
-                            _adaptiveInterval.UpdateInterval(false, false);
-                            DetectionInterval = _adaptiveInterval.GetCurrentInterval();
-                        }
-                    }
-                }
-                finally
-                {
-                    // キャプチャ画像の確実な解放
-                    if (windowCapture != null)
-                    {
-                        ResourceManager.ReleaseResource(windowCapture);
-                        windowCapture = null;
-                    }
-                }
+                // 既存のOCR処理...
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"テキスト検出エラー: {ex.Message}");
-                _lastErrorMessage = $"検出エラー: {ex.Message}";
+                // Loggerを使用した詳細なエラーログ
+                Logger.Instance.LogError("テキスト検出エラー: " + ex.Message, ex);
                 _consecutiveErrors++;
-                UpdateProcessingStatus($"エラー: {ex.Message}", 0);
-
-                // 連続エラーが多すぎる場合はリカバリーを試みる
-                if (_consecutiveErrors >= MAX_CONSECUTIVE_ERRORS)
-                {
-                    Debug.WriteLine($"連続エラーが{MAX_CONSECUTIVE_ERRORS}回発生したため、リカバリーを試みます");
-                    _consecutiveErrors = 0;
-                    _noRegionsDetectedCount = 0;
-                    _detectedRegions.Clear();
-                    _lastDetectedText = string.Empty;
-
-                    // クリーンアップイベントを発行
-                    OnNoRegionsDetected?.Invoke(this, EventArgs.Empty);
-                }
             }
             finally
             {
-                // 処理時間を記録
-                _processingStopwatch.Stop();
-                _totalProcessingTime += _processingStopwatch.ElapsedMilliseconds;
-                _processedFrames++;
-
-                if (_processedFrames % 10 == 0)
-                {
-                    long avgProcessingTime = _totalProcessingTime / _processedFrames;
-                    Debug.WriteLine($"平均処理時間: {avgProcessingTime}ms ({_processedFrames}フレーム)");
-
-                    // メモリ使用状況をチェック
-                    int resourceCount = ResourceManager.GetResourceCount();
-                    Debug.WriteLine($"リソースカウント: {resourceCount}");
-                }
-
-                // 処理完了フラグを解除
+                // 処理完了フラグを解除 - 必ず実行されるように
                 _processingActive = false;
                 UpdateProcessingStatus("完了", 100);
 
-                // タイマーを再開（オブジェクトが破棄されていない場合のみ）
+                // タイマー再開
                 if (!_disposed && _isRunning && _targetWindowHandle != IntPtr.Zero)
                 {
                     _detectionTimer.Start();

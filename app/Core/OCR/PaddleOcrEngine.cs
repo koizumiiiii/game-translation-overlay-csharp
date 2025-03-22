@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Threading.Tasks;
 using PaddleOCRSharp;
 using System.Collections.Generic;
+using GameTranslationOverlay.Core.Diagnostics;
 
 namespace GameTranslationOverlay.Core.OCR
 {
@@ -136,23 +137,26 @@ namespace GameTranslationOverlay.Core.OCR
         {
             if (_paddleOcr == null)
             {
+                Logger.Instance.LogError("PaddleOCRエンジンが初期化されていません");
                 throw new InvalidOperationException("PaddleOCR engine is not initialized");
             }
 
             if (_isDisposed)
             {
+                Logger.Instance.LogError("破棄済みのPaddleOCRエンジンにアクセスしました");
                 throw new ObjectDisposedException(nameof(PaddleOcrEngine));
             }
 
             return await Task.Run(() =>
             {
-                // 処理結果を格納する変数
+                // 処理結果変数
                 List<TextRegion> textRegions = new List<TextRegion>();
-                // 処理中の画像を格納する変数
                 Bitmap processedImage = null;
 
                 try
                 {
+                    // 処理開始ログ
+                    Logger.Instance.LogDebug("PaddleOcrEngine", "テキスト検出処理開始");
                     // メモリ使用量をログに記録（デバッグ用）
                     Debug.WriteLine($"メモリ使用量: {GC.GetTotalMemory(false) / (1024 * 1024)}MB");
 
@@ -269,11 +273,12 @@ namespace GameTranslationOverlay.Core.OCR
                         }
                     }
 
+                    Logger.Instance.LogDebug("PaddleOcrEngine", $"{textRegions.Count}個のテキスト領域を検出");
                     return textRegions;
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"Error in text region detection: {ex.Message}");
+                    Logger.Instance.LogError("テキスト領域検出エラー: " + ex.Message, ex);
                     return new List<TextRegion>();
                 }
                 finally
