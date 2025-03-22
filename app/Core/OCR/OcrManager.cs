@@ -9,6 +9,7 @@ using GameTranslationOverlay.Core.Configuration;
 using GameTranslationOverlay.Core.Diagnostics;
 using Windows.Media.Ocr;
 using GameTranslationOverlay.Core.OCR.AI;
+using System.IO;
 
 namespace GameTranslationOverlay.Core.OCR
 {
@@ -115,12 +116,46 @@ namespace GameTranslationOverlay.Core.OCR
                 _isProcessing = true;
                 _processingStartTime = DateTime.Now;
 
+                // 処理前に現在の設定をログに記録（デバッグレベル）
+                if (AppSettings.Instance.DebugModeEnabled)
+                {
+                    LogCurrentSettings();
+                }
+
                 Logger.Instance.LogDebug("OcrManager", "OCR処理開始");
 
                 // 実際のOCR処理
                 var result = await _paddleOcrEngine.DetectTextRegionsAsync(image);
 
-                Logger.Instance.LogDebug("OcrManager", $"OCR処理完了: {result.Count}個のテキスト領域を検出");
+                // 処理結果のログ出力強化
+                if (result.Count == 0)
+                {
+                    Logger.Instance.LogWarning("OCR処理完了しましたが、テキスト領域が検出されませんでした");
+
+                    // デバッグモード時のみ画像を保存
+                    if (AppSettings.Instance.DebugModeEnabled)
+                    {
+                        try
+                        {
+                            string debugDir = Path.Combine(
+                                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                                "GameTranslationOverlay", "Debug");
+                            Directory.CreateDirectory(debugDir);
+                            string filename = Path.Combine(debugDir, $"ocr_failed_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+                            image.Save(filename, System.Drawing.Imaging.ImageFormat.Png);
+                            Logger.Instance.LogDebug("OcrManager", $"OCR失敗時の画像を保存: {filename}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.Instance.LogError($"デバッグ画像保存エラー: {ex.Message}", ex);
+                        }
+                    }
+                }
+                else
+                {
+                    Logger.Instance.LogInfo($"OCR処理完了: {result.Count}個のテキスト領域を検出");
+                }
+
                 return result;
             }
             catch (Exception ex)
@@ -672,8 +707,63 @@ namespace GameTranslationOverlay.Core.OCR
             }
         }
 
+        // LogCurrentSettings()メソッドの追加 - 現在のOCR設定を詳細にログ出力
+        public void LogCurrentSettings()
+        {
+            Logger.Instance.LogInfo("===== 現在のOCR設定 =====");
+            Logger.Instance.LogInfo($"信頼度閾値: {_confidenceThreshold:F2}");
+            Logger.Instance.LogInfo($"前処理: {(_usePreprocessing ? "有効" : "無効")}");
+            Logger.Instance.LogInfo($"適応モード: {(_useAdaptiveMode ? "有効" : "無効")}");
+
+            if (_adaptivePreprocessor != null && _adaptivePreprocessor.CurrentPreprocessingOptions != null)
+            {
+                var options = _adaptivePreprocessor.CurrentPreprocessingOptions;
+                Logger.Instance.LogInfo($"前処理設定: コントラスト={options.ContrastLevel:F2}, 明るさ={options.BrightnessLevel:F2}, " +
+                                        $"シャープネス={options.SharpnessLevel:F2}, ノイズ除去={options.NoiseReduction}, " +
+                                        $"スケール={options.ScaleFactor:F2}, パディング={options.Padding}");
+            }
+            else
+            {
+                Logger.Instance.LogWarning("前処理設定が未設定または取得できません");
+            }
+            Logger.Instance.LogInfo("=========================");
+        }
+
+        // UpdatePreprocessingSettings - PaddleOcrEngineへの設定伝達を確実にするメソッド
+        public void UpdatePreprocessingSettings(GameTranslationOverlay.Core.Utils.PreprocessingOptions options)
+        {
+            if (options == null)
+            {
+                Logger.Instance.LogWarning("null前処理設定が更新されようとしました");
+                return;
+            }
+
+            // 前処理設定を適応型プリプロセッサに設定
+            if (_adaptivePreprocessor != null)
+            {
+                _adaptivePreprocessor.CurrentPreprocessingOptions = options;
+                Logger.Instance.LogInfo("適応型プリプロセッサに前処理設定を適用しました");
+            }
+
+            // PaddleOCRエンジンに直接設定を適用
+            if (_paddleOcrEngine != null)
+            {
+                // PreprocessingOptionsの変換（Utils -> OCR名前空間）
+                var ocrOptions = PreprocessingOptions.FromUtilsOptions(options);
+                _paddleOcrEngine.SetPreprocessingOptions(ocrOptions);
+                // 前処理を有効化
+                _paddleOcrEngine.EnablePreprocessing(_usePreprocessing);
+
+                Logger.Instance.LogInfo("PaddleOCRエンジンに前処理設定を直接適用しました");
+            }
+            else
+            {
+                Logger.Instance.LogWarning("PaddleOCRエンジンがnullのため、設定を適用できません");
+            }
+        }
+
         // AIで最適化された設定適用のログの強化
-        public void ApplySettings(OcrOptimalSettings settings)
+        public void ApplySettings(OCR.AI.OcrOptimalSettings settings)
         {
             if (settings == null)
             {
@@ -681,18 +771,28 @@ namespace GameTranslationOverlay.Core.OCR
                 return;
             }
 
-            // ConfidenceThresholdはプロパティではなくメソッドで設定
+            Logger.Instance.LogInfo($"OCR最適化設定の適用を開始: 信頼度={settings.ConfidenceThreshold:F2}");
+
+            // 信頼度閾値の設定
             this.SetConfidenceThreshold(settings.ConfidenceThreshold);
 
             // 前処理設定の適用
             var preprocessingOptions = settings.ToPreprocessingOptions();
-            this.SetPreprocessingOptions(preprocessingOptions);
 
-            // 設定適用のログ出力
-            Logger.Instance.LogInfo($"OCR設定を適用: 信頼度={settings.ConfidenceThreshold:F2}, " +
+            // 前処理の有効化
+            this.EnablePreprocessing(true);
+
+            // 設定を適応型プリプロセッサとPaddleOCRエンジン両方に確実に伝達
+            this.UpdatePreprocessingSettings(preprocessingOptions);
+
+            // 設定適用の確認ログ
+            Logger.Instance.LogInfo($"OCR設定を適用しました: 信頼度={_confidenceThreshold:F2}, " +
                 $"コントラスト={preprocessingOptions.ContrastLevel:F2}, " +
                 $"明るさ={preprocessingOptions.BrightnessLevel:F2}, " +
                 $"シャープネス={preprocessingOptions.SharpnessLevel:F2}");
+
+            // 現在の設定を詳細にログ出力
+            LogCurrentSettings();
         }
 
         /// <summary>
