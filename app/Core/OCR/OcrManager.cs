@@ -35,8 +35,6 @@ namespace GameTranslationOverlay.Core.OCR
 
         // 並行処理の制御
         private readonly object _ocrLock = new object();
-        private bool _processingActive = false;
-        private int _consecutiveErrors = 0;
         private const int MAX_CONSECUTIVE_ERRORS = 5;
 
         // パフォーマンス測定とトラッキング
@@ -102,7 +100,7 @@ namespace GameTranslationOverlay.Core.OCR
             // タイムアウト判定
             if (_isProcessing && (DateTime.Now - _processingStartTime).TotalMilliseconds > _processingTimeoutMs)
             {
-                Logger.Instance.LogWarning("OcrManager", "OCR処理タイムアウトのためリセットします");
+                Logger.Instance.LogWarning("OCR処理タイムアウトのためリセットします");
                 _isProcessing = false;
             }
 
@@ -127,7 +125,7 @@ namespace GameTranslationOverlay.Core.OCR
             }
             catch (Exception ex)
             {
-                Logger.Instance.LogError("OcrManager", "OCR処理中にエラーが発生しました: " + ex.Message, ex);
+                Logger.Instance.LogError("OCR処理中にエラーが発生しました: " + ex.Message, ex);
                 return new List<TextRegion>();
             }
             finally
@@ -679,7 +677,7 @@ namespace GameTranslationOverlay.Core.OCR
         {
             if (settings == null)
             {
-                Logger.Instance.LogWarning("OcrManager", "null設定が適用されようとしました");
+                Logger.Instance.LogWarning("null設定が適用されようとしました");
                 return;
             }
 
@@ -691,8 +689,7 @@ namespace GameTranslationOverlay.Core.OCR
             this.SetPreprocessingOptions(preprocessingOptions);
 
             // 設定適用のログ出力
-            Logger.Instance.LogInfo("OcrManager",
-                $"OCR設定を適用: 信頼度={settings.ConfidenceThreshold:F2}, " +
+            Logger.Instance.LogInfo($"OCR設定を適用: 信頼度={settings.ConfidenceThreshold:F2}, " +
                 $"コントラスト={preprocessingOptions.ContrastLevel:F2}, " +
                 $"明るさ={preprocessingOptions.BrightnessLevel:F2}, " +
                 $"シャープネス={preprocessingOptions.SharpnessLevel:F2}");
