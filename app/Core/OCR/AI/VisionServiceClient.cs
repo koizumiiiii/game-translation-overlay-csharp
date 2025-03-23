@@ -2,16 +2,19 @@ using GameTranslationOverlay.Core.Diagnostics;
 using GameTranslationOverlay.Core.Security;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using SharpDX;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace GameTranslationOverlay.Core.OCR.AI
 {
@@ -116,8 +119,35 @@ namespace GameTranslationOverlay.Core.OCR.AI
             // レスポンス解析
             List<TextRegion> regions = ParseGpt4VisionResponse(response, image.Width, image.Height);
 
+            // 詳細なAIレスポンス分析
+            LogAiResponse(response, regions, "GPT4Vision", image);
+
             Logger.Instance.LogDebug("VisionServiceClient", $"GPT-4 Visionが{regions.Count}個のテキスト領域を検出しました");
+
+            // AIレスポンスについての詳細なログ
+            if (regions.Count > 0)
+            {
+                Logger.Instance.LogDebug("VisionServiceClient", $"=== GPT-4 Vision 検出テキストサンプル ===");
+                foreach (var region in regions.Take(Math.Min(3, regions.Count)))
+                {
+                    Logger.Instance.LogDebug("VisionServiceClient", $"テキスト: '{TruncateText(region.Text, 30)}', " +
+                                            $"位置: [{region.Bounds.X},{region.Bounds.Y},{region.Bounds.Width},{region.Bounds.Height}], " +
+                                            $"信頼度: {region.Confidence:F2}");
+                }
+            }
+            else
+            {
+                Logger.Instance.LogWarning("GPT-4 Visionはテキスト領域を検出できませんでした");
+            }
+
             return regions;
+        }
+
+        // テキストを指定の長さに切り詰める補助メソッド
+        private string TruncateText(string text, int maxLength)
+        {
+            if (string.IsNullOrEmpty(text)) return string.Empty;
+            return text.Length <= maxLength ? text : text.Substring(0, maxLength - 3) + "...";
         }
 
         /// <summary>
@@ -136,7 +166,27 @@ namespace GameTranslationOverlay.Core.OCR.AI
             // レスポンス解析
             List<TextRegion> regions = ParseGeminiVisionResponse(response, image.Width, image.Height);
 
+            // 詳細なAIレスポンス分析
+            LogAiResponse(response, regions, "GeminiVision", image);
+
             Logger.Instance.LogDebug("VisionServiceClient", $"Gemini Pro Visionが{regions.Count}個のテキスト領域を検出しました");
+
+            // AIレスポンスについての詳細なログ
+            if (regions.Count > 0)
+            {
+                Logger.Instance.LogDebug("VisionServiceClient", $"=== Gemini Vision 検出テキストサンプル ===");
+                foreach (var region in regions.Take(Math.Min(3, regions.Count)))
+                {
+                    Logger.Instance.LogDebug("VisionServiceClient", $"テキスト: '{TruncateText(region.Text, 30)}', " +
+                                            $"位置: [{region.Bounds.X},{region.Bounds.Y},{region.Bounds.Width},{region.Bounds.Height}], " +
+                                            $"信頼度: {region.Confidence:F2}");
+                }
+            }
+            else
+            {
+                Logger.Instance.LogWarning("Gemini Visionはテキスト領域を検出できませんでした");
+            }
+
             return regions;
         }
 
@@ -181,23 +231,23 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     model = "gpt-4-vision-preview",
                     messages = new[]
                     {
+                new
+                {
+                    role = "user",
+                    content = new object[]
+                    {
+                        new { type = "text", text = "Extract all visible text from this game screenshot. For each text element, provide the exact text content and its position (x, y, width, height) in the image. Format as JSON with an array of text regions. Be extremely accurate with the text content." },
                         new
                         {
-                            role = "user",
-                            content = new object[]
+                            type = "image_url",
+                            image_url = new
                             {
-                                new { type = "text", text = "Extract all visible text from this game screenshot. For each text element, provide the exact text content and its position (x, y, width, height) in the image. Format as JSON with an array of text regions. Be extremely accurate with the text content." },
-                                new
-                                {
-                                    type = "image_url",
-                                    image_url = new
-                                    {
-                                        url = $"data:image/jpeg;base64,{base64Image}"
-                                    }
-                                }
+                                url = $"data:image/jpeg;base64,{base64Image}"
                             }
                         }
-                    },
+                    }
+                }
+            },
                     max_tokens = 1500  // トークン数を増やして長いテキストにも対応
                 };
 
@@ -527,16 +577,24 @@ namespace GameTranslationOverlay.Core.OCR.AI
             {
                 List<TextRegion> result = new List<TextRegion>();
 
+                // 解析前のデバッグログ
+                Logger.Instance.LogDebug("VisionServiceClient", "Gemini Visionレスポンスの解析を開始します");
+
                 JObject responseObj = JObject.Parse(response);
                 string contentText = responseObj["candidates"]?[0]?["content"]?["parts"]?[0]?["text"]?.ToString();
 
                 if (string.IsNullOrEmpty(contentText))
                 {
                     Logger.Instance.LogError("Gemini Pro Visionレスポンスからテキストコンテンツが見つかりませんでした");
+                    // レスポンス全体をデバッグログに保存
+                    string responseLogPath = Path.Combine(_debugDir, $"gemini_empty_response_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+                    File.WriteAllText(responseLogPath, response);
+                    Logger.Instance.LogDebug("VisionServiceClient", $"空のコンテンツを持つレスポンスを保存しました: {responseLogPath}");
                     return result;
                 }
 
                 // JSONブロックを抽出する
+                Logger.Instance.LogDebug("VisionServiceClient", "JSONブロックの抽出を試みます");
                 string jsonContent = ExtractJsonFromText(contentText);
                 if (string.IsNullOrEmpty(jsonContent))
                 {
@@ -547,34 +605,59 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     File.WriteAllText(contentLogPath, contentText);
                     Logger.Instance.LogDebug("VisionServiceClient", $"Gemini Visionコンテンツを保存しました: {contentLogPath}");
 
-                    return result;
+                    // 代替のJSONフォーマット検索を試みる
+                    Logger.Instance.LogDebug("VisionServiceClient", "代替のJSON抽出方法を試みます");
+                    jsonContent = TryAlternativeJsonExtraction(contentText);
+                    if (string.IsNullOrEmpty(jsonContent))
+                    {
+                        return result;
+                    }
                 }
 
                 // JSONを解析してTextRegionに変換
                 try
                 {
+                    Logger.Instance.LogDebug("VisionServiceClient", $"JSONの解析を開始します: {TruncateText(jsonContent, 100)}");
                     JArray regionsArray = JArray.Parse(jsonContent);
                     Logger.Instance.LogDebug("VisionServiceClient", $"抽出されたJSONに{regionsArray.Count}個のテキスト領域があります");
 
                     foreach (JToken token in regionsArray)
                     {
-                        string text = token["text"]?.ToString();
-                        double x = token["x"]?.Value<double>() ?? 0;
-                        double y = token["y"]?.Value<double>() ?? 0;
-                        double width = token["width"]?.Value<double>() ?? 0;
-                        double height = token["height"]?.Value<double>() ?? 0;
-
-                        // 相対座標から絶対ピクセル座標に変換
-                        Rectangle bounds = ConvertToPixelBounds(x, y, width, height, imageWidth, imageHeight);
-
-                        if (!string.IsNullOrEmpty(text) && bounds.Width > 0 && bounds.Height > 0)
+                        try
                         {
-                            result.Add(new TextRegion
+                            string text = token["text"]?.ToString();
+                            double x = token["x"]?.Value<double>() ?? 0;
+                            double y = token["y"]?.Value<double>() ?? 0;
+                            double width = token["width"]?.Value<double>() ?? 0;
+                            double height = token["height"]?.Value<double>() ?? 0;
+
+                            // 値のログ記録
+                            Logger.Instance.LogDebug("VisionServiceClient", $"解析されたテキスト領域: テキスト='{TruncateText(text, 20)}', " +
+                                                    $"x={x}, y={y}, width={width}, height={height}");
+
+                            // 相対座標から絶対ピクセル座標に変換
+                            Rectangle bounds = ConvertToPixelBounds(x, y, width, height, imageWidth, imageHeight);
+                            Logger.Instance.LogDebug("VisionServiceClient", $"変換後の座標: [{bounds.X},{bounds.Y},{bounds.Width},{bounds.Height}]");
+
+                            if (!string.IsNullOrEmpty(text) && bounds.Width > 0 && bounds.Height > 0)
                             {
-                                Text = text,
-                                Bounds = bounds,
-                                Confidence = 0.95f // Gemini Pro Visionは高精度だが、GPT-4よりやや低めに設定
-                            });
+                                result.Add(new TextRegion
+                                {
+                                    Text = text,
+                                    Bounds = bounds,
+                                    Confidence = 0.95f // Gemini Pro Visionは高精度だが、GPT-4よりやや低めに設定
+                                });
+                            }
+                            else
+                            {
+                                // この部分はループ内にあるため、text と bounds 変数にアクセスできる
+                                string displayText = text ?? "[null]";
+                                Logger.Instance.LogWarning($"無効なテキスト領域データをスキップ: テキスト='{displayText}', 座標=[{bounds.X},{bounds.Y},{bounds.Width},{bounds.Height}]");
+                            }
+                        }
+                        catch (Exception tokenEx)
+                        {
+                            Logger.Instance.LogError($"テキスト領域の解析中にエラーが発生しました: {tokenEx.Message}", tokenEx);
                         }
                     }
                 }
@@ -588,6 +671,7 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     Logger.Instance.LogDebug("VisionServiceClient", $"解析できなかったJSONを保存しました: {jsonErrorPath}");
 
                     // フォールバック: テキスト全体を1つのTextRegionとして返す
+                    Logger.Instance.LogDebug("VisionServiceClient", "フォールバック: テキスト全体を1つの領域として処理します");
                     result.Add(new TextRegion
                     {
                         Text = contentText,
@@ -602,6 +686,88 @@ namespace GameTranslationOverlay.Core.OCR.AI
             {
                 Logger.Instance.LogError($"Gemini Pro Visionレスポンスの解析中にエラーが発生しました: {ex.Message}", ex);
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// 代替のJSON抽出方法を試みる
+        /// </summary>
+        private string TryAlternativeJsonExtraction(string text)
+        {
+            try
+            {
+                // 最終手段: テキスト解析によるJSON構造の検出
+                Logger.Instance.LogDebug("VisionServiceClient", "代替JSON抽出: テキスト解析による検出を試みます");
+
+                // 各行を解析して配列を構築
+                List<JObject> items = new List<JObject>();
+                string[] lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+
+                foreach (string line in lines)
+                {
+                    // "領域X: テキスト「XXXX」、座標(x, y, width, height)" のようなパターンを検出
+                    if (line.Contains("テキスト") && (line.Contains("座標") || line.Contains("位置")))
+                    {
+                        try
+                        {
+                            JObject item = new JObject();
+
+                            // テキスト部分を抽出
+                            int textStart = line.IndexOf("「");
+                            int textEnd = line.IndexOf("」");
+                            if (textStart >= 0 && textEnd > textStart)
+                            {
+                                string extractedText = line.Substring(textStart + 1, textEnd - textStart - 1);
+                                item["text"] = extractedText;
+                            }
+
+                            // 座標部分を抽出
+                            int coordStart = line.IndexOf("(");
+                            int coordEnd = line.IndexOf(")");
+                            if (coordStart >= 0 && coordEnd > coordStart)
+                            {
+                                string coords = line.Substring(coordStart + 1, coordEnd - coordStart - 1);
+                                string[] parts = coords.Split(',');
+                                if (parts.Length >= 4)
+                                {
+                                    double.TryParse(parts[0].Trim(), out double x);
+                                    double.TryParse(parts[1].Trim(), out double y);
+                                    double.TryParse(parts[2].Trim(), out double width);
+                                    double.TryParse(parts[3].Trim(), out double height);
+
+                                    item["x"] = x;
+                                    item["y"] = y;
+                                    item["width"] = width;
+                                    item["height"] = height;
+                                }
+                            }
+
+                            if (item.ContainsKey("text") && item.ContainsKey("x"))
+                            {
+                                items.Add(item);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.Instance.LogDebug("VisionServiceClient", $"行の解析に失敗: {ex.Message}");
+                        }
+                    }
+                }
+
+                if (items.Count > 0)
+                {
+                    JArray array = new JArray(items);
+                    Logger.Instance.LogDebug("VisionServiceClient", $"代替抽出で{items.Count}個のテキスト領域を見つけました");
+                    return array.ToString();
+                }
+
+                Logger.Instance.LogDebug("VisionServiceClient", "代替JSONの抽出に失敗しました");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Logger.Instance.LogError($"代替JSON抽出中にエラーが発生しました: {ex.Message}", ex);
+                return null;
             }
         }
 
@@ -773,6 +939,121 @@ namespace GameTranslationOverlay.Core.OCR.AI
             pixelHeight = Math.Max(1, Math.Min(pixelHeight, imageHeight - pixelY));
 
             return new Rectangle(pixelX, pixelY, pixelWidth, pixelHeight);
+        }
+
+        /// <summary>
+        /// AIからのレスポンスと抽出されたテキスト領域の詳細をログに記録します
+        /// </summary>
+        private void LogAiResponse(string response, List<TextRegion> extractedRegions, string serviceType, Bitmap originalImage)
+        {
+            try
+            {
+                // AIログ専用ディレクトリの作成
+                string logDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "GameTranslationOverlay", "AILogs");
+
+                Directory.CreateDirectory(logDir);
+                string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+
+                // 生のAIレスポンスを保存
+                string rawResponsePath = Path.Combine(logDir, $"{serviceType}_raw_response_{timestamp}.json");
+                File.WriteAllText(rawResponsePath, response);
+
+                // 抽出されたテキスト領域の詳細を保存
+                string regionsLogPath = Path.Combine(logDir, $"{serviceType}_extracted_regions_{timestamp}.txt");
+                using (StreamWriter writer = new StreamWriter(regionsLogPath))
+                {
+                    writer.WriteLine($"抽出されたテキスト領域数: {extractedRegions.Count}\n");
+
+                    for (int i = 0; i < extractedRegions.Count; i++)
+                    {
+                        var region = extractedRegions[i];
+                        writer.WriteLine($"領域 #{i + 1}:");
+                        writer.WriteLine($"  テキスト: \"{region.Text}\"");
+                        writer.WriteLine($"  座標: [{region.Bounds.X}, {region.Bounds.Y}, {region.Bounds.Width}, {region.Bounds.Height}]");
+                        writer.WriteLine($"  信頼度: {region.Confidence}");
+                        writer.WriteLine();
+                    }
+                }
+
+                // テキスト領域を視覚化した画像を保存
+                if (originalImage != null && extractedRegions.Count > 0)
+                {
+                    string visualizationPath = Path.Combine(logDir, $"{serviceType}_visualization_{timestamp}.png");
+                    SaveVisualization(originalImage, extractedRegions, visualizationPath);
+                }
+
+                Logger.Instance.LogDebug("VisionServiceClient", $"AIレスポンスログを保存しました: {rawResponsePath}");
+                Logger.Instance.LogDebug("VisionServiceClient", $"抽出テキスト領域ログを保存しました: {regionsLogPath}");
+            }
+            catch (Exception ex)
+            {
+                Logger.Instance.LogError($"AIレスポンスのログ記録中にエラーが発生しました: {ex.Message}", ex);
+            }
+        }
+
+        /// <summary>
+        /// テキスト領域を視覚化して画像として保存します
+        /// </summary>
+        private void SaveVisualization(Bitmap originalImage, List<TextRegion> regions, string outputPath)
+        {
+            try
+            {
+                // 元のイメージのコピーを作成
+                using (Bitmap visualization = new Bitmap(originalImage))
+                {
+                    using (Graphics g = Graphics.FromImage(visualization))
+                    {
+                        // 各テキスト領域を描画
+                        foreach (var region in regions)
+                        {
+                            // 領域を赤い枠で囲む
+                            using (Pen pen = new Pen(Color.Red, 2))
+                            {
+                                g.DrawRectangle(pen, region.Bounds);
+                            }
+
+                            // テキスト内容を描画（短くする）
+                            string shortText = region.Text.Length > 20
+                                ? region.Text.Substring(0, 17) + "..."
+                                : region.Text;
+
+                            // テキストの背景を半透明の黒にして読みやすくする
+                            using (Brush bgBrush = new SolidBrush(Color.FromArgb(128, 0, 0, 0)))
+                            {
+                                // テキスト測定
+                                SizeF textSize = g.MeasureString(shortText, SystemFonts.DefaultFont);
+                                g.FillRectangle(bgBrush,
+                                    region.Bounds.X,
+                                    region.Bounds.Y - textSize.Height - 2,
+                                    textSize.Width,
+                                    textSize.Height);
+                            }
+
+                            // テキストを白色で描画
+                            using (Brush textBrush = new SolidBrush(Color.White))
+                            {
+                                g.DrawString(shortText, SystemFonts.DefaultFont, textBrush,
+                                    region.Bounds.X, region.Bounds.Y - SystemFonts.DefaultFont.Height - 2);
+                            }
+
+                            // 信頼度の表示
+                            string confidenceText = $"{region.Confidence:P0}";
+                            g.DrawString(confidenceText, SystemFonts.DefaultFont, Brushes.Yellow,
+                                region.Bounds.X, region.Bounds.Y + region.Bounds.Height + 2);
+                        }
+                    }
+
+                    // 画像を保存
+                    visualization.Save(outputPath, System.Drawing.Imaging.ImageFormat.Png);
+                    Logger.Instance.LogDebug("VisionServiceClient", $"テキスト領域の視覚化を保存しました: {outputPath}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Instance.LogError($"視覚化画像の保存中にエラーが発生しました: {ex.Message}", ex);
+            }
         }
     }
 }

@@ -80,6 +80,8 @@
     <Compile Include="Core\OCR\Benchmark\OcrBenchmarkTest.cs" />
     <Compile Include="Core\OCR\DifferenceDetector.cs" />
     <Compile Include="Core\OCR\OcrManager.cs" />
+    <Compile Include="Core\OCR\OcrOptimizer.cs" />
+    <Compile Include="Core\OCR\OcrSettings.cs" />
     <Compile Include="Core\OCR\OcrTest.cs" />
     <Compile Include="Core\OCR\PaddleOcrEngine.cs" />
     <Compile Include="Core\OCR\PreprocessingOptions.cs" />
