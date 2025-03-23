@@ -123,63 +123,152 @@ namespace GameTranslationOverlay.Core.OCR.AI
         /// <param name="gameTitle">ゲームタイトル</param>
         /// <param name="sampleScreen">サンプル画面</param>
         /// <returns>最適化された設定</returns>
-        public async Task<OcrOptimalSettings> OptimizeForGame(string gameTitle, Bitmap sampleScreen)
+        public async Task<bool> OptimizeForGame(string gameTitle, Bitmap sampleScreen)
         {
-            Debug.WriteLine($"OptimizeForGame: {gameTitle} のOCR最適化を開始");
-
-            // AIテキスト抽出の直前にデバッグ出力を追加
-            Debug.WriteLine("AIによるテキスト抽出を開始します...");
-            bool hasSufficientText = await HasSufficientText(sampleScreen);
-            Debug.WriteLine($"HasSufficientText 結果: {hasSufficientText}");
-
             try
             {
-                // AIによるテキスト抽出
-                List<TextRegion> aiTextRegions = await ExtractTextWithAI(sampleScreen);
-                Debug.WriteLine($"AI応答: {aiTextRegions.Count}個のテキスト領域を抽出");
+                // AI Visionからの応答を取得
+                var aiTextRegions = await ExtractTextWithAI(sampleScreen);
 
-                // テキスト領域に基づく最適設定の生成
-                OcrOptimalSettings optimalSettings = new OcrOptimalSettings();
-
-                // デフォルト設定から開始
-                optimalSettings.ConfidenceThreshold = 0.5f;
-                optimalSettings.ContrastLevel = 1.0f;
-                optimalSettings.BrightnessLevel = 1.0f;
-                optimalSettings.SharpnessLevel = 0.0f;
-                optimalSettings.NoiseReduction = 0;
-                optimalSettings.ScaleFactor = 1.0f;
-
-                // AI結果に基づいた設定調整
-                if (aiTextRegions.Count > 0)
+                if (aiTextRegions.Count == 0)
                 {
-                    // テキスト特性に基づく調整
-                    if (ContainsPixelatedFont(aiTextRegions))
-                    {
-                        optimalSettings.SharpnessLevel = 0.0f; // ピクセルフォントではシャープネスを下げる
-                        optimalSettings.NoiseReduction = 0;    // ノイズ除去も不要
-                    }
-                    else if (ContainsStylizedFont(aiTextRegions))
-                    {
-                        optimalSettings.ContrastLevel = 1.4f;  // 装飾フォントではコントラストを上げる
-                    }
+                    Logger.Instance.LogWarning($"AIはテキスト領域を検出できませんでした: {gameTitle}");
+                    return false;
                 }
 
-                // 設定をログに出力
-                Debug.WriteLine($"生成された最適設定: 信頼度={optimalSettings.ConfidenceThreshold}, " +
-                                $"コントラスト={optimalSettings.ContrastLevel}, " +
-                                $"明るさ={optimalSettings.BrightnessLevel}, " +
-                                $"シャープネス={optimalSettings.SharpnessLevel}, " +
-                                $"ノイズ除去={optimalSettings.NoiseReduction}, " +
-                                $"スケール={optimalSettings.ScaleFactor}");
+                // AIの結果からOCR設定を生成
+                var optimalSettings = CreateOptimalSettingsFromAiResults(aiTextRegions, sampleScreen);
 
-                return optimalSettings;
+                // OCRマネージャーに設定を適用
+                // エラー原因: OcrManager.Instanceの参照
+                // 修正: ローカルの_ocrEngineを使用
+                if (_ocrEngine is OcrManager ocrManager)
+                {
+                    ocrManager.SetConfidenceThreshold(optimalSettings.ConfidenceThreshold);
+                    ocrManager.SetPreprocessingOptions(optimalSettings.ToPreprocessingOptions());
+                    ocrManager.EnablePreprocessing(true);
+
+                    // 検証: 新しい設定で実際にテキストが認識できるか確認
+                    var verificationResult = await _ocrEngine.DetectTextRegionsAsync(sampleScreen);
+
+                    // 検証結果の評価
+                    bool optimizationSuccessful = verificationResult.Count > 0;
+
+                    if (optimizationSuccessful)
+                    {
+                        // 最適化履歴に保存
+                        // エラー原因: GameProfiles.Instanceの参照
+                        // 修正: 最適化履歴に直接保存
+                        _optimizationHistory[gameTitle] = new OptimalSettings
+                        {
+                            ConfidenceThreshold = optimalSettings.ConfidenceThreshold,
+                            PreprocessingOptions = optimalSettings.ToPreprocessingOptions(),
+                            LastOptimized = DateTime.Now,
+                            OptimizationAttempts = 1,
+                            IsOptimized = true,
+                            AiSuggestions = new Dictionary<string, object>()
+                        };
+
+                        // 設定を保存
+                        SaveOptimizationSettings();
+
+                        Logger.Instance.LogInfo($"OCR最適化が完了しました: {gameTitle} (検出テキスト領域: {verificationResult.Count})");
+                    }
+                    else
+                    {
+                        // 最適化が効果を発揮しなかった場合
+                        Logger.Instance.LogWarning($"OCR最適化を試みましたが、テキスト検出に失敗しました: {gameTitle}");
+                        // ここで代替手段を提案するメッセージを表示
+                    }
+
+                    return optimizationSuccessful;
+                }
+                else
+                {
+                    Logger.Instance.LogWarning("OCRエンジンが適切な型ではないため、設定を適用できません");
+                    return false;
+                }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"OCR最適化中に例外が発生: {ex.Message}");
-                Debug.WriteLine($"スタックトレース: {ex.StackTrace}");
-                throw; // 例外を再スロー
+                Logger.Instance.LogError($"OCR最適化中にエラーが発生しました: {ex.Message}");
+                return false;
             }
+        }
+
+        // AIの結果からOCR設定を生成するメソッド
+        private OcrOptimalSettings CreateOptimalSettingsFromAiResults(List<TextRegion> aiTextRegions, Bitmap sampleScreen)
+        {
+            // ここで実際の生成ロジックを実装
+            // 例: テキスト領域のサイズ、コントラスト、密度などに基づいて最適な設定を決定
+
+            var settings = new OcrOptimalSettings
+            {
+                ConfidenceThreshold = 0.3f,  // AIが検出できたテキストなので、低めの閾値から開始
+                ContrastLevel = 1.5f,        // コントラストを少し強調
+                BrightnessLevel = 1.0f,      // 明るさは維持
+                SharpnessLevel = 0.5f,       // 適度なシャープネス
+                NoiseReduction = 0,          // ノイズ除去は使用しない（テキストが消える可能性）
+                ScaleFactor = 1.2f,          // 少し拡大してみる
+                Padding = 5                  // パディングで文字が切れるのを防止
+            };
+
+            // ゲーム画面分析に基づく調整
+            AnalyzeAndAdjustSettings(settings, sampleScreen, aiTextRegions);
+
+            return settings;
+        }
+
+        // 画面分析に基づく設定調整
+        private void AnalyzeAndAdjustSettings(OcrOptimalSettings settings, Bitmap image, List<TextRegion> regions)
+        {
+            // 画像の明るさ分析
+            double averageBrightness = CalculateAverageBrightness(image);
+
+            // 明るさに基づく調整
+            if (averageBrightness < 0.3) // 暗い画面
+            {
+                settings.BrightnessLevel = 1.2f;
+                settings.ContrastLevel = 1.7f;
+            }
+            else if (averageBrightness > 0.7) // 明るい画面
+            {
+                settings.BrightnessLevel = 0.9f;
+                settings.ContrastLevel = 1.3f;
+            }
+
+            // テキスト領域のサイズに基づく調整
+            var averageTextHeight = regions.Average(r => r.Bounds.Height);
+            if (averageTextHeight < 15) // 小さいテキスト
+            {
+                settings.ScaleFactor = 1.5f;
+            }
+            else if (averageTextHeight > 40) // 大きいテキスト
+            {
+                settings.ScaleFactor = 1.0f;
+            }
+
+            // その他の分析と調整...
+        }
+
+        // 画像の平均明るさを計算
+        private double CalculateAverageBrightness(Bitmap image)
+        {
+            // 簡易的な実装 - サンプリングして平均明るさを計算
+            int sampleSize = 50;
+            int totalSamples = sampleSize * sampleSize;
+            double totalBrightness = 0;
+
+            for (int y = 0; y < image.Height; y += image.Height / sampleSize)
+            {
+                for (int x = 0; x < image.Width; x += image.Width / sampleSize)
+                {
+                    Color pixel = image.GetPixel(x, y);
+                    totalBrightness += (pixel.R + pixel.G + pixel.B) / (3.0 * 255.0);
+                }
+            }
+
+            return totalBrightness / totalSamples;
         }
 
         /// <summary>

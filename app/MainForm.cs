@@ -378,30 +378,29 @@ namespace GameTranslationOverlay
 
                         // 最適化を実行
                         progressOverlay.UpdateStatus(OptimizationProgressOverlay.OptimizationStep.GeneratingSettings);
-                        var optimalSettings = await _ocrOptimizer.OptimizeForGame(gameTitle, screenshot);
+                        bool optimizationSuccessful = await _ocrOptimizer.OptimizeForGame(gameTitle, screenshot);
 
-                        // 最適化設定を適用
-                        progressOverlay.UpdateStatus(OptimizationProgressOverlay.OptimizationStep.ApplyingOptimization);
-
-                        // ゲームプロファイルに保存
-                        var profileSettings = new OcrOptimizer.OptimalSettings
+                        if (optimizationSuccessful)
                         {
-                            ConfidenceThreshold = optimalSettings.ConfidenceThreshold,
-                            PreprocessingOptions = optimalSettings.ToPreprocessingOptions(),
-                            LastOptimized = DateTime.Now,
-                            OptimizationAttempts = 1,
-                            IsOptimized = true,
-                            AiSuggestions = new Dictionary<string, object>() // 必要に応じて値を追加
-                        };
-                        _gameProfiles.SaveProfile(gameTitle, profileSettings);
+                            // 最適化設定を適用
+                            progressOverlay.UpdateStatus(OptimizationProgressOverlay.OptimizationStep.ApplyingOptimization);
 
-                        // 成功を記録
-                        ApiUsageManager.Instance.RecordApiCall(gameTitle, true);
+                            // 成功を記録
+                            ApiUsageManager.Instance.RecordApiCall(gameTitle, true);
 
-                        progressOverlay.UpdateStatus(OptimizationProgressOverlay.OptimizationStep.Completed, 100);
-                        await Task.Delay(1500); // 完了メッセージを表示する時間
+                            progressOverlay.UpdateStatus(OptimizationProgressOverlay.OptimizationStep.Completed, 100);
+                            await Task.Delay(1500); // 完了メッセージを表示する時間
 
-                        UpdateStatus($"{gameTitle} のOCR設定を最適化しました");
+                            UpdateStatus($"{gameTitle} のOCR設定を最適化しました");
+                        }
+                        else
+                        {
+                            // 最適化に失敗した場合
+                            progressOverlay.UpdateStatus(OptimizationProgressOverlay.OptimizationStep.Failed, 100);
+                            await Task.Delay(1500);
+
+                            UpdateStatus($"{gameTitle} のOCR設定の最適化に失敗しました。AI翻訳モードの使用をお勧めします。");
+                        }
                     }
                 }
                 catch (Exception ex)
