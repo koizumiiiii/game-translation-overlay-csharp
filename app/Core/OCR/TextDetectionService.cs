@@ -247,6 +247,14 @@ namespace GameTranslationOverlay.Core.OCR
                 return;
             }
 
+            // 有効なウィンドウハンドルが設定されていない場合は早期リターン
+            if (_targetWindowHandle == IntPtr.Zero || !WindowUtils.IsWindowValid(_targetWindowHandle))
+            {
+                Debug.WriteLine("対象ウィンドウが無効なため、検出をスキップします");
+                _lastErrorMessage = "対象ウィンドウが無効です";
+                return;
+            }
+
             _isProcessing = true;
             Bitmap windowCapture = null;
 
@@ -256,13 +264,6 @@ namespace GameTranslationOverlay.Core.OCR
                 _detectionTimer.Stop();
 
                 UpdateProcessingStatus("処理開始", 0);
-
-                if (_targetWindowHandle == IntPtr.Zero || !WindowUtils.IsWindowValid(_targetWindowHandle))
-                {
-                    Debug.WriteLine("対象ウィンドウが無効なため、検出をスキップします");
-                    _lastErrorMessage = "対象ウィンドウが無効です";
-                    return;
-                }
 
                 // ターゲットウィンドウの領域を取得
                 Rectangle windowRect = WindowUtils.GetWindowRect(_targetWindowHandle);

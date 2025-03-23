@@ -24,6 +24,22 @@ namespace GameTranslationOverlay.Forms
         public WindowInfo SelectedWindow { get; private set; }
 
         /// <summary>
+        /// 選択されたウィンドウハンドル
+        /// </summary>
+        public IntPtr SelectedWindowHandle 
+        { 
+            get { return SelectedWindow?.Handle ?? IntPtr.Zero; } 
+        }
+
+        /// <summary>
+        /// 選択されたウィンドウのタイトル
+        /// </summary>
+        public string SelectedWindowTitle
+        {
+            get { return SelectedWindow?.Title ?? string.Empty; }
+        }
+
+        /// <summary>
         /// コンストラクタ
         /// </summary>
         public WindowSelectorForm()

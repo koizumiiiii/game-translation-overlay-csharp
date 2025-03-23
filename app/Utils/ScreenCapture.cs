@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Diagnostics;
+using GameTranslationOverlay.Utils;
 
 namespace GameTranslationOverlay.Utils
 {
@@ -89,8 +90,12 @@ namespace GameTranslationOverlay.Utils
         /// <returns>キャプチャした画像</returns>
         public static Bitmap CaptureWindow(IntPtr hWnd)
         {
-            if (hWnd == IntPtr.Zero)
+            // ウィンドウハンドルの検証
+            if (hWnd == IntPtr.Zero || !WindowUtils.IsWindowValid(hWnd))
+            {
+                Debug.WriteLine("無効なウィンドウハンドルでのキャプチャを試行しました");
                 return null;
+            }
 
             // PrintWindowを試す（より高い互換性）
             try

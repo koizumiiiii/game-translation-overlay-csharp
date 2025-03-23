@@ -736,9 +736,10 @@ namespace GameTranslationOverlay
 
                 // オーバーレイフォームの作成時にOCRマネージャーとTranslationManagerを渡す
                 _overlayForm = new OverlayForm(_ocrManager, _translationManager);
-
+                
                 _overlayForm.Show();
                 Debug.WriteLine("InitializeServices: オーバーレイフォーム作成完了");
+                // 注意：ここではテキスト検出を開始しません。ウィンドウ選択後に開始します。
 
                 UpdateStatus("準備完了");
             }
@@ -900,12 +901,15 @@ namespace GameTranslationOverlay
                         _startTranslationButton.Enabled = true;
                         UpdateStatus($"選択: {_selectedWindow.Title}");
 
-                        // オーバーレイフォームに対象ウィンドウを設定して自動検出を開始
+                        // オーバーレイフォームに対象ウィンドウを設定
                         if (_overlayForm != null)
                         {
+                            // ウィンドウを選択した後にオーバーレイとテキスト検出を設定
                             _overlayForm.SetTargetWindow(_selectedWindow.Handle);
                             _checkWindowTimer.Start();
                             _toggleTextDetectionButton.Enabled = true;
+                            
+                            // この時点でテキスト検出を開始（ウィンドウ選択後）
                             _overlayForm.StartTextDetection();
 
                             UpdateStatus($"翻訳実行中: {_selectedWindow.Title}");
