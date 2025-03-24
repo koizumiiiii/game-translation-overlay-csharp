@@ -395,9 +395,11 @@ namespace GameTranslationOverlay
                         }
                         else
                         {
-                            // 最適化に失敗した場合
+                            // 失敗を記録
+                            ApiUsageManager.Instance.RecordApiCall(gameTitle, false);
+
                             progressOverlay.UpdateStatus(OptimizationProgressOverlay.OptimizationStep.Failed, 100);
-                            await Task.Delay(1500);
+                            await Task.Delay(1500); // 失敗メッセージを表示する時間
 
                             UpdateStatus($"{gameTitle} のOCR設定の最適化に失敗しました。AI翻訳モードの使用をお勧めします。");
                         }
@@ -411,6 +413,7 @@ namespace GameTranslationOverlay
                     progressOverlay.UpdateStatus(OptimizationProgressOverlay.OptimizationStep.Failed);
                     await Task.Delay(1500); // エラーメッセージを表示する時間
 
+                    // エラーメッセージの詳細化
                     if (ex.Message.Contains("テキストが十分に表示されていません"))
                     {
                         MessageBox.Show(

@@ -140,8 +140,6 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 var optimalSettings = CreateOptimalSettingsFromAiResults(aiTextRegions, sampleScreen);
 
                 // OCRマネージャーに設定を適用
-                // エラー原因: OcrManager.Instanceの参照
-                // 修正: ローカルの_ocrEngineを使用
                 if (_ocrEngine is OcrManager ocrManager)
                 {
                     ocrManager.SetConfidenceThreshold(optimalSettings.ConfidenceThreshold);
@@ -154,11 +152,30 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     // 検証結果の評価
                     bool optimizationSuccessful = verificationResult.Count > 0;
 
+                    // デバッグモードでは詳細なログを記録
+                    if (AppSettings.Instance.DebugModeEnabled)
+                    {
+                        if (optimizationSuccessful)
+                        {
+                            Logger.Instance.LogDebug("OcrOptimizer", $"OCR最適化検証成功: {verificationResult.Count}個のテキスト領域を検出");
+                            foreach (var region in verificationResult)
+                            {
+                                Logger.Instance.LogDebug("OcrOptimizer", $"検出テキスト: \"{region.Text}\", 信頼度: {region.Confidence:F2}");
+                            }
+                        }
+                        else
+                        {
+                            Logger.Instance.LogDebug("OcrOptimizer", "OCR最適化検証失敗: テキスト領域を検出できませんでした");
+                            Logger.Instance.LogDebug("OcrOptimizer", $"適用した設定: 信頼度閾値={optimalSettings.ConfidenceThreshold:F2}, " +
+                                              $"コントラスト={optimalSettings.ContrastLevel:F2}, " +
+                                              $"明るさ={optimalSettings.BrightnessLevel:F2}, " +
+                                              $"スケール={optimalSettings.ScaleFactor:F2}");
+                        }
+                    }
+
                     if (optimizationSuccessful)
                     {
                         // 最適化履歴に保存
-                        // エラー原因: GameProfiles.Instanceの参照
-                        // 修正: 最適化履歴に直接保存
                         _optimizationHistory[gameTitle] = new OptimalSettings
                         {
                             ConfidenceThreshold = optimalSettings.ConfidenceThreshold,
@@ -178,7 +195,6 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     {
                         // 最適化が効果を発揮しなかった場合
                         Logger.Instance.LogWarning($"OCR最適化を試みましたが、テキスト検出に失敗しました: {gameTitle}");
-                        // ここで代替手段を提案するメッセージを表示
                     }
 
                     return optimizationSuccessful;
@@ -186,13 +202,13 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 else
                 {
                     Logger.Instance.LogWarning("OCRエンジンが適切な型ではないため、設定を適用できません");
-                    return false;
+                    return false; // OCRエンジンが正しい型でない場合はfalseを返す
                 }
             }
             catch (Exception ex)
             {
                 Logger.Instance.LogError($"OCR最適化中にエラーが発生しました: {ex.Message}");
-                return false;
+                return false; // 例外発生時もfalseを返す
             }
         }
 
