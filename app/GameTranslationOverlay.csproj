@@ -68,6 +68,7 @@
     <Compile Include="Core\Configuration\GameProfiles.cs" />
     <Compile Include="Core\Diagnostics\DiagnosticsCollector.cs" />
     <Compile Include="Core\Diagnostics\ErrorReporter.cs" />
+    <Compile Include="Core\Diagnostics\ILogger.cs" />
     <Compile Include="Core\Diagnostics\Logger.cs" />
     <Compile Include="Core\Diagnostics\RecoveryManager.cs" />
     <Compile Include="Core\Licensing\LicenseManager.cs" />

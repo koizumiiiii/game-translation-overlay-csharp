@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -11,7 +11,7 @@ namespace GameTranslationOverlay.Core.Diagnostics
     /// <summary>
     /// アプリケーションログを管理するクラス
     /// </summary>
-    public class Logger
+    public class Logger : ILogger
     {
         #region シングルトンパターン
 
@@ -147,17 +147,67 @@ namespace GameTranslationOverlay.Core.Diagnostics
 
         #endregion
 
-        #region ログメソッド
+        #region ILogger インターフェース実装
 
         /// <summary>
         /// デバッグレベルのログを記録します
         /// </summary>
-        /// <param name="source">ログソース（クラス名など）</param>
         /// <param name="message">ログメッセージ</param>
-        public void LogDebug(string source, string message)
+        public void LogDebug(string message)
         {
-            Log(LogLevel.Debug, source, message);
+            Log(LogLevel.Debug, "Application", message);
         }
+
+        /// <summary>
+        /// デバッグレベルのログをカテゴリ付きで記録します
+        /// </summary>
+        /// <param name="category">ログカテゴリ</param>
+        /// <param name="message">ログメッセージ</param>
+        public void LogDebug(string category, string message)
+        {
+            Log(LogLevel.Debug, category, message);
+        }
+
+        /// <summary>
+        /// 情報レベルのログを記録します
+        /// </summary>
+        /// <param name="message">ログメッセージ</param>
+        public void LogInfo(string message)
+        {
+            Log(LogLevel.Info, "Application", message);
+        }
+
+        /// <summary>
+        /// 警告レベルのログを記録します
+        /// </summary>
+        /// <param name="message">ログメッセージ</param>
+        public void LogWarning(string message)
+        {
+            Log(LogLevel.Warning, "Application", message);
+        }
+
+        /// <summary>
+        /// エラーレベルのログを記録します
+        /// </summary>
+        /// <param name="message">ログメッセージ</param>
+        public void LogError(string message)
+        {
+            Log(LogLevel.Error, "Application", message);
+        }
+
+        /// <summary>
+        /// 例外を含むエラーレベルのログを記録します
+        /// </summary>
+        /// <param name="message">ログメッセージ</param>
+        /// <param name="exception">例外オブジェクト</param>
+        public void LogError(string message, Exception exception)
+        {
+            Log(LogLevel.Error, "Application", message, exception);
+        }
+
+        #endregion
+
+        #region ログメソッド
 
         /// <summary>
         /// 情報レベルのログを記録します
@@ -174,7 +224,7 @@ namespace GameTranslationOverlay.Core.Diagnostics
         /// </summary>
         /// <param name="message">ログメッセージ</param>
         /// <param name="exception">例外オブジェクト（省略可）</param>
-        public void LogInfo(string message, Exception exception = null)
+        public void LogInfo(string message, Exception exception)
         {
             Log(LogLevel.Info, "Application", message, exception);
         }
@@ -194,7 +244,7 @@ namespace GameTranslationOverlay.Core.Diagnostics
         /// </summary>
         /// <param name="message">ログメッセージ</param>
         /// <param name="exception">例外オブジェクト（省略可）</param>
-        public void LogWarning(string message, Exception exception = null)
+        public void LogWarning(string message, Exception exception)
         {
             Log(LogLevel.Warning, "Application", message, exception);
         }
@@ -208,16 +258,6 @@ namespace GameTranslationOverlay.Core.Diagnostics
         public void Error(string source, string message, Exception exception = null)
         {
             Log(LogLevel.Error, source, message, exception);
-        }
-
-        /// <summary>
-        /// エラーレベルのログを記録します（LogError という名前でも呼び出し可能）
-        /// </summary>
-        /// <param name="message">ログメッセージ</param>
-        /// <param name="exception">例外オブジェクト（省略可）</param>
-        public void LogError(string message, Exception exception = null)
-        {
-            Log(LogLevel.Error, "Application", message, exception);
         }
 
         /// <summary>

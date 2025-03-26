@@ -14,7 +14,7 @@ namespace GameTranslationOverlay.Core.Configuration
     /// <summary>
     /// ゲームごとの最適化プロファイルを管理するクラス
     /// </summary>
-    public class GameProfiles
+    public class GameProfiles : IGameProfiles
     {
         private readonly Dictionary<string, OcrOptimizer.OptimalSettings> _profiles = new Dictionary<string, OcrOptimizer.OptimalSettings>();
         private readonly string _profilesFilePath;

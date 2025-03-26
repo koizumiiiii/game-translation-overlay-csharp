@@ -34,16 +34,131 @@ namespace GameTranslationOverlay.Core.OCR.AI
         private readonly string _settingsFilePath;
         private readonly VisionServiceClient _visionClient;
         private readonly LanguageDetector _languageDetector;
+        private readonly ILogger _logger;
+        private readonly IFileSystem _fileSystem;
+        private readonly IGameProfiles _gameProfiles;
+        private readonly IEnvironmentService _environmentService;
+
+        // 最適化検証用の閾値
+        private const int MINIMUM_REGIONS_FOR_SUCCESS = 1;    // 少なくとも1つのテキスト領域
+        private const float MINIMUM_CONFIDENCE_THRESHOLD = 0.3f; // 最低信頼度閾値
+
+        // 最適化結果と状態
+        public enum OptimizationStatus
+        {
+            NotStarted,
+            InProgress,
+            Success,
+            FailedNoTextDetected,
+            FailedVerificationFailed,
+            FailedAIError,
+            FailedOtherError
+        }
+
+        public class OptimizationResult
+        {
+            // 基本状態
+            public OptimizationStatus Status { get; set; } = OptimizationStatus.NotStarted;
+            public OptimalSettings Settings { get; set; }
+            public int DetectedRegionsCount { get; set; }
+            public float AverageConfidence { get; set; }
+            public string ErrorMessage { get; set; }
+            public string DetailedLog { get; set; }
+            public TimeSpan OptimizationTime { get; set; }
+            
+            // 拡張プロパティ
+            public bool IsSuccessful => Status == OptimizationStatus.Success;
+            public bool VerificationSuccessful { get; set; }
+            public string DetailedMessage { get; set; }
+            
+            // 各段階の詳細情報
+            public StageResults StageInfo { get; set; } = new StageResults();
+            
+            // 診断情報
+            public Dictionary<string, object> DiagnosticInfo { get; set; } = new Dictionary<string, object>();
+            
+            // 推奨アクション（失敗時）
+            public List<string> RecommendedActions { get; set; } = new List<string>();
+
+            // 以前の定義（互換性のため維持）
+            public bool IsOptimized => Status == OptimizationStatus.Success;
+            
+            // 診断情報を追加するユーティリティメソッド
+            public void AddDiagnosticInfo(string key, object value)
+            {
+                if (DiagnosticInfo == null)
+                {
+                    DiagnosticInfo = new Dictionary<string, object>();
+                }
+                DiagnosticInfo[key] = value;
+            }
+            
+            // 推奨アクションを追加するユーティリティメソッド
+            public void AddRecommendedAction(string action)
+            {
+                if (RecommendedActions == null)
+                {
+                    RecommendedActions = new List<string>();
+                }
+                RecommendedActions.Add(action);
+            }
+            
+            // 詳細メッセージを設定するユーティリティメソッド
+            public void SetDetailedMessage(string message, bool append = false)
+            {
+                if (append && !string.IsNullOrEmpty(DetailedMessage))
+                {
+                    DetailedMessage += Environment.NewLine + message;
+                }
+                else
+                {
+                    DetailedMessage = message;
+                }
+            }
+        }
+        
+        // 最適化の各段階の結果を保持するクラス
+        public class StageResults
+        {
+            // 段階1: 初期OCR
+            public int InitialDetectedRegions { get; set; }
+            public float InitialAverageConfidence { get; set; }
+            
+            // 段階2: AI分析
+            public int AiDetectedTextRegions { get; set; }
+            public List<string> AiDetectedTextSamples { get; set; } = new List<string>();
+            
+            // 段階3: 設定生成
+            public OcrOptimalSettings GeneratedSettings { get; set; }
+            public int TestedSettingsCount { get; set; }
+            
+            // 段階4: 初期テスト
+            public bool InitialTestSuccessful { get; set; }
+            public string InitialTestReason { get; set; }
+            
+            // 段階5: 検証
+            public bool VerificationPassed { get; set; }
+            public string VerificationDetails { get; set; }
+            public int VerificationDetectedRegions { get; set; }
+            public float VerificationAverageConfidence { get; set; }
+            public Dictionary<string, int> ConfidenceHistogram { get; set; }
+            
+            // 段階6: 最終結果
+            public bool FinalSuccess { get; set; }
+            public string FailureReason { get; set; }
+        }
 
         // 最適化設定を表すクラス
         public class OptimalSettings
         {
             public float ConfidenceThreshold { get; set; } = 0.5f;
-            public GameTranslationOverlay.Core.Utils.PreprocessingOptions PreprocessingOptions { get; set; }
+            public GameTranslationOverlay.Core.Utils.PreprocessingOptions PreprocessingOptions { get; set; } = new GameTranslationOverlay.Core.Utils.PreprocessingOptions();
             public DateTime LastOptimized { get; set; } = DateTime.Now;
             public int OptimizationAttempts { get; set; } = 1;
             public bool IsOptimized { get; set; } = false;
             public Dictionary<string, object> AiSuggestions { get; set; } = new Dictionary<string, object>();
+            public int DetectedRegionsCount { get; set; }
+            public float AverageConfidence { get; set; }
 
             /// <summary>
             /// ゲームプロファイルから互換性のある設定を作成
@@ -71,7 +186,9 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     LastOptimized = profileSettings.LastOptimized,
                     OptimizationAttempts = profileSettings.OptimizationAttempts,
                     IsOptimized = profileSettings.IsOptimized,
-                    AiSuggestions = new Dictionary<string, object>(profileSettings.AiSuggestions ?? new Dictionary<string, object>())
+                    AiSuggestions = new Dictionary<string, object>(profileSettings.AiSuggestions ?? new Dictionary<string, object>()),
+                    DetectedRegionsCount = profileSettings.DetectedRegionsCount,
+                    AverageConfidence = profileSettings.AverageConfidence
                 };
             }
         }
@@ -84,33 +201,56 @@ namespace GameTranslationOverlay.Core.OCR.AI
         /// コンストラクタ
         /// </summary>
         /// <param name="ocrEngine">最適化対象のOCRエンジン</param>
-        /// <param name="apiKey">AI APIキー（オプション、指定しない場合はデフォルト設定から取得）</param>
-        public OcrOptimizer(IOcrEngine ocrEngine, string apiKey = null)
+        /// <param name="visionClient">AI Vision クライアント</param>
+        /// <param name="languageDetector">言語検出器</param>
+        /// <param name="logger">ロガー</param>
+        /// <param name="fileSystem">ファイルシステム操作インターフェース</param>
+        /// <param name="gameProfiles">ゲームプロファイル管理</param>
+        /// <param name="environmentService">環境設定サービス</param>
+        /// <param name="customSettingsPath">カスタム設定パス（省略時はデフォルトパス）</param>
+        public OcrOptimizer(
+            IOcrEngine ocrEngine,
+            VisionServiceClient visionClient, // nullを許容するよう修正
+            LanguageDetector languageDetector, // nullを許容するよう修正
+            ILogger logger,
+            IFileSystem fileSystem,
+            IGameProfiles gameProfiles,
+            IEnvironmentService environmentService,
+            string customSettingsPath = null)
         {
             _ocrEngine = ocrEngine ?? throw new ArgumentNullException(nameof(ocrEngine));
+            _visionClient = visionClient; // null チェックを削除
+            _languageDetector = languageDetector; // null チェックを削除
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _fileSystem = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
+            _gameProfiles = gameProfiles ?? throw new ArgumentNullException(nameof(gameProfiles));
+            _environmentService = environmentService ?? throw new ArgumentNullException(nameof(environmentService));
 
             // 設定ファイルパスの設定
-            string appDataPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "GameTranslationOverlay");
+            string appDataPath;
 
-            if (!Directory.Exists(appDataPath))
+            if (string.IsNullOrEmpty(customSettingsPath))
             {
-                Directory.CreateDirectory(appDataPath);
+                appDataPath = Path.Combine(
+                    _environmentService.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "GameTranslationOverlay");
+
+                if (!_fileSystem.DirectoryExists(appDataPath))
+                {
+                    _fileSystem.CreateDirectory(appDataPath);
+                }
+
+                _settingsFilePath = Path.Combine(appDataPath, "ocr_optimization.json");
             }
-
-            _settingsFilePath = Path.Combine(appDataPath, "ocr_optimization.json");
-
-            // AIサービスクライアントの初期化
-            _visionClient = new VisionServiceClient();
-
-            // 言語検出器の初期化
-            _languageDetector = new LanguageDetector();
+            else
+            {
+                _settingsFilePath = customSettingsPath;
+            }
 
             // 保存された最適化設定を読み込む
             LoadOptimizationSettings();
 
-            Debug.WriteLine("OcrOptimizer initialized");
+            _logger.LogDebug("OcrOptimizer", "OCR最適化コンポーネント初期化完了");
         }
 
         #endregion
@@ -122,94 +262,500 @@ namespace GameTranslationOverlay.Core.OCR.AI
         /// </summary>
         /// <param name="gameTitle">ゲームタイトル</param>
         /// <param name="sampleScreen">サンプル画面</param>
-        /// <returns>最適化された設定</returns>
-        public async Task<bool> OptimizeForGame(string gameTitle, Bitmap sampleScreen)
+        /// <returns>最適化結果</returns>
+        public async Task<OptimizationResult> OptimizeForGameAsync(string gameTitle, Bitmap sampleScreen)
         {
+            var stopwatch = Stopwatch.StartNew();
+            var result = new OptimizationResult
+            {
+                Status = OptimizationStatus.InProgress
+            };
+
+            var logBuilder = new StringBuilder();
+            logBuilder.AppendLine($"OCR最適化開始: {gameTitle} ({DateTime.Now})");
+            logBuilder.AppendLine($"画像サイズ: {sampleScreen.Width}x{sampleScreen.Height}");
+
             try
             {
+                // 事前にチェック用OCR実行して比較用のデータを取得
+                logBuilder.AppendLine("ステップ1: 最適化前のOCR結果を取得");
+                var preOptimizationRegions = await _ocrEngine.DetectTextRegionsAsync(sampleScreen);
+                var preOptimizationRegionCount = preOptimizationRegions.Count;
+                var preOptimizationAvgConfidence = preOptimizationRegions.Count > 0
+                    ? preOptimizationRegions.Average(r => r.Confidence)
+                    : 0;
+
+                // 段階1の結果を保存
+                result.StageInfo.InitialDetectedRegions = preOptimizationRegionCount;
+                result.StageInfo.InitialAverageConfidence = preOptimizationAvgConfidence;
+                result.AddDiagnosticInfo("InitialOcrResult", new { 
+                    RegionCount = preOptimizationRegionCount, 
+                    AverageConfidence = preOptimizationAvgConfidence,
+                    Samples = preOptimizationRegions.Take(3).Select(r => r.Text).ToList()
+                });
+
+                logBuilder.AppendLine($"最適化前のテキスト領域数: {preOptimizationRegionCount}");
+                logBuilder.AppendLine($"最適化前の平均信頼度: {preOptimizationAvgConfidence:F2}");
+
+                // 既存の設定をバックアップ
+                float originalConfidenceThreshold = 0;
+                GameTranslationOverlay.Core.Utils.PreprocessingOptions originalPreprocessingOptions = null;
+                bool originalPreprocessingEnabled = true;
+
+                if (_ocrEngine is OcrManager ocrManager)
+                {
+                    // OcrManager クラスのメソッドを使用して値を取得する
+                    originalConfidenceThreshold = 0.6f; // デフォルト値を使用
+                    originalPreprocessingEnabled = true; // デフォルト値を使用
+                    
+                    // CurrentPreprocessingOptions の代わりに単純なデフォルト値を使用
+                    originalPreprocessingOptions = new GameTranslationOverlay.Core.Utils.PreprocessingOptions();
+                    
+                    logBuilder.AppendLine($"現在の設定: 信頼度閾値={originalConfidenceThreshold:F2}, 前処理有効={originalPreprocessingEnabled}");
+                    
+                    // 現在の設定を診断情報に追加
+                    result.AddDiagnosticInfo("OriginalSettings", new {
+                        ConfidenceThreshold = originalConfidenceThreshold,
+                        PreprocessingEnabled = originalPreprocessingEnabled,
+                        PreprocessingOptions = originalPreprocessingOptions
+                    });
+                }
+
                 // AI Visionからの応答を取得
+                logBuilder.AppendLine("ステップ2: AIによるテキスト領域の分析");
                 var aiTextRegions = await ExtractTextWithAI(sampleScreen);
+
+                // 段階2の結果を保存
+                result.StageInfo.AiDetectedTextRegions = aiTextRegions.Count;
+                result.StageInfo.AiDetectedTextSamples = aiTextRegions.Take(3).Select(r => r.Text).ToList();
+                result.AddDiagnosticInfo("AiDetection", new {
+                    RegionCount = aiTextRegions.Count,
+                    Samples = aiTextRegions.Take(3).Select(r => new { Text = r.Text, Bounds = r.Bounds }).ToList()
+                });
 
                 if (aiTextRegions.Count == 0)
                 {
-                    Logger.Instance.LogWarning($"AIはテキスト領域を検出できませんでした: {gameTitle}");
-                    return false;
+                    result.Status = OptimizationStatus.FailedNoTextDetected;
+                    result.ErrorMessage = "AIはテキスト領域を検出できませんでした";
+                    result.SetDetailedMessage("AIエンジンはサンプル画像からテキストを検出できませんでした。画像にテキストが含まれていない可能性があります。");
+                    logBuilder.AppendLine("エラー: AIはテキスト領域を検出できませんでした");
+                    
+                    // 推奨アクションを追加
+                    result.AddRecommendedAction("画面に明確なテキストが表示されている状態でキャプチャを取り直してください");
+                    result.AddRecommendedAction("コントラストの高いテキストを含む画面を選択してください");
+                    result.AddRecommendedAction("ゲーム内のテキスト密度が高いシーンを選んでください");
+
+                    _logger.LogWarning($"AIはテキスト領域を検出できませんでした: {gameTitle}");
+
+                    // 元の設定に戻す（必要な場合）
+                    if (_ocrEngine is OcrManager currentOcrManager)
+                    {
+                        RestoreOriginalSettings(currentOcrManager, originalConfidenceThreshold, originalPreprocessingOptions, originalPreprocessingEnabled);
+                    }
+
+                    result.DetailedLog = logBuilder.ToString();
+                    stopwatch.Stop();
+                    result.OptimizationTime = stopwatch.Elapsed;
+                    return result;
+                }
+
+                logBuilder.AppendLine($"AIが検出したテキスト領域の数: {aiTextRegions.Count}");
+                foreach (var region in aiTextRegions.Take(5)) // 最初の5つだけログ記録
+                {
+                    logBuilder.AppendLine($"  テキスト: \"{TruncateText(region.Text, 30)}\", 位置: {region.Bounds}");
+                }
+                if (aiTextRegions.Count > 5)
+                {
+                    logBuilder.AppendLine($"  その他 {aiTextRegions.Count - 5} 個のテキスト領域...");
                 }
 
                 // AIの結果からOCR設定を生成
+                logBuilder.AppendLine("ステップ3: AI分析結果からOCR設定を生成");
                 var optimalSettings = CreateOptimalSettingsFromAiResults(aiTextRegions, sampleScreen);
+                
+                // 段階3の結果を保存
+                result.StageInfo.GeneratedSettings = optimalSettings;
+                result.StageInfo.TestedSettingsCount = 1; // この実装では1つの設定のみ生成
+                result.AddDiagnosticInfo("GeneratedSettings", new {
+                    ConfidenceThreshold = optimalSettings.ConfidenceThreshold,
+                    ContrastLevel = optimalSettings.ContrastLevel,
+                    BrightnessLevel = optimalSettings.BrightnessLevel,
+                    ScaleFactor = optimalSettings.ScaleFactor
+                });
+                
+                logBuilder.AppendLine($"生成した設定: 信頼度閾値={optimalSettings.ConfidenceThreshold:F2}, " +
+                                 $"コントラスト={optimalSettings.ContrastLevel:F2}, " +
+                                 $"明るさ={optimalSettings.BrightnessLevel:F2}, " +
+                                 $"スケール={optimalSettings.ScaleFactor:F2}");
 
                 // OCRマネージャーに設定を適用
-                if (_ocrEngine is OcrManager ocrManager)
+                if (_ocrEngine is OcrManager currentManager)
                 {
-                    ocrManager.SetConfidenceThreshold(optimalSettings.ConfidenceThreshold);
-                    ocrManager.SetPreprocessingOptions(optimalSettings.ToPreprocessingOptions());
-                    ocrManager.EnablePreprocessing(true);
+                    logBuilder.AppendLine("ステップ4: 生成した設定をOCRエンジンに適用");
+                    currentManager.SetConfidenceThreshold(optimalSettings.ConfidenceThreshold);
+                    currentManager.SetPreprocessingOptions(optimalSettings.ToPreprocessingOptions());
+                    currentManager.EnablePreprocessing(true);
 
                     // 検証: 新しい設定で実際にテキストが認識できるか確認
+                    logBuilder.AppendLine("ステップ5: 新しい設定で検証テスト実行");
                     var verificationResult = await _ocrEngine.DetectTextRegionsAsync(sampleScreen);
+                    int verificationCount = verificationResult.Count;
+                    float averageConfidence = verificationCount > 0
+                        ? verificationResult.Average(r => r.Confidence)
+                        : 0;
 
-                    // 検証結果の評価
-                    bool optimizationSuccessful = verificationResult.Count > 0;
+                    // 段階5の初期結果を保存
+                    result.StageInfo.VerificationDetectedRegions = verificationCount;
+                    result.StageInfo.VerificationAverageConfidence = averageConfidence;
+                    result.AddDiagnosticInfo("VerificationResult", new {
+                        RegionCount = verificationCount,
+                        AverageConfidence = averageConfidence,
+                        Samples = verificationResult.Take(3).Select(r => new { Text = r.Text, Confidence = r.Confidence }).ToList()
+                    });
 
-                    // デバッグモードでは詳細なログを記録
-                    if (AppSettings.Instance.DebugModeEnabled)
+                    logBuilder.AppendLine($"検証結果: {verificationCount}個のテキスト領域を検出");
+                    logBuilder.AppendLine($"平均信頼度: {averageConfidence:F2}");
+
+                    // 検出されたテキストのサンプルをログに記録
+                    if (verificationCount > 0)
                     {
-                        if (optimizationSuccessful)
+                        logBuilder.AppendLine("検出テキストのサンプル:");
+                        foreach (var region in verificationResult.Take(Math.Min(5, verificationCount)))
                         {
-                            Logger.Instance.LogDebug("OcrOptimizer", $"OCR最適化検証成功: {verificationResult.Count}個のテキスト領域を検出");
-                            foreach (var region in verificationResult)
-                            {
-                                Logger.Instance.LogDebug("OcrOptimizer", $"検出テキスト: \"{region.Text}\", 信頼度: {region.Confidence:F2}");
-                            }
-                        }
-                        else
-                        {
-                            Logger.Instance.LogDebug("OcrOptimizer", "OCR最適化検証失敗: テキスト領域を検出できませんでした");
-                            Logger.Instance.LogDebug("OcrOptimizer", $"適用した設定: 信頼度閾値={optimalSettings.ConfidenceThreshold:F2}, " +
-                                              $"コントラスト={optimalSettings.ContrastLevel:F2}, " +
-                                              $"明るさ={optimalSettings.BrightnessLevel:F2}, " +
-                                              $"スケール={optimalSettings.ScaleFactor:F2}");
+                            logBuilder.AppendLine($"  \"{TruncateText(region.Text, 30)}\", 信頼度: {region.Confidence:F2}");
                         }
                     }
 
-                    if (optimizationSuccessful)
+                    // 検証結果の評価
+                    bool optimizationSuccessful = false;
+
+                    // 基本的な成功条件（少なくとも1つのテキスト領域）
+                    if (verificationCount >= MINIMUM_REGIONS_FOR_SUCCESS)
                     {
-                        // 最適化履歴に保存
-                        _optimizationHistory[gameTitle] = new OptimalSettings
+                        // 改善されたかの評価
+                        bool improvedCount = verificationCount > preOptimizationRegionCount;
+                        bool improvedConfidence = averageConfidence > preOptimizationAvgConfidence;
+
+                        // 元々テキストが検出できなかった場合は、検出できるようになれば成功
+                        if (preOptimizationRegionCount == 0)
+                        {
+                            optimizationSuccessful = true;
+                            result.StageInfo.InitialTestSuccessful = true;
+                            result.StageInfo.InitialTestReason = "最適化前は検出できなかったテキストが検出可能になりました";
+                            logBuilder.AppendLine("✓ 最適化成功: 最適化前は検出できなかったテキストが検出可能になりました");
+                        }
+                        // テキスト検出数が増えた場合は成功
+                        else if (improvedCount)
+                        {
+                            optimizationSuccessful = true;
+                            result.StageInfo.InitialTestSuccessful = true;
+                            result.StageInfo.InitialTestReason = $"テキスト検出数が増加 ({preOptimizationRegionCount} → {verificationCount})";
+                            logBuilder.AppendLine($"✓ 最適化成功: テキスト検出数が増加 ({preOptimizationRegionCount} → {verificationCount})");
+                        }
+                        // 検出数は同じだが、信頼度が向上した場合は成功
+                        else if (verificationCount == preOptimizationRegionCount && improvedConfidence)
+                        {
+                            optimizationSuccessful = true;
+                            result.StageInfo.InitialTestSuccessful = true;
+                            result.StageInfo.InitialTestReason = $"信頼度が向上 ({preOptimizationAvgConfidence:F2} → {averageConfidence:F2})";
+                            logBuilder.AppendLine($"✓ 最適化成功: 信頼度が向上 ({preOptimizationAvgConfidence:F2} → {averageConfidence:F2})");
+                        }
+                        // 検出数が減少したが、信頼度が大幅に向上した場合は成功（ノイズ削減の可能性）
+                        else if (verificationCount < preOptimizationRegionCount &&
+                                averageConfidence > preOptimizationAvgConfidence * 1.2f) // 信頼度が20%以上向上
+                        {
+                            optimizationSuccessful = true;
+                            result.StageInfo.InitialTestSuccessful = true;
+                            result.StageInfo.InitialTestReason = $"信頼度が大幅に向上 ({preOptimizationAvgConfidence:F2} → {averageConfidence:F2})、より精度の高いテキスト領域を検出";
+                            logBuilder.AppendLine($"✓ 最適化成功: 信頼度が大幅に向上 ({preOptimizationAvgConfidence:F2} → {averageConfidence:F2})、より精度の高いテキスト領域を検出");
+                        }
+                        // 改善が見られない場合
+                        else
+                        {
+                            optimizationSuccessful = false;
+                            result.StageInfo.InitialTestSuccessful = false;
+                            result.StageInfo.InitialTestReason = "有意な改善が見られません";
+                            logBuilder.AppendLine($"✗ 最適化失敗: 有意な改善が見られません");
+                        }
+                    }
+                    else
+                    {
+                        optimizationSuccessful = false;
+                        result.StageInfo.InitialTestSuccessful = false;
+                        result.StageInfo.InitialTestReason = $"テキスト領域を十分に検出できませんでした ({verificationCount} < {MINIMUM_REGIONS_FOR_SUCCESS})";
+                        logBuilder.AppendLine($"✗ 最適化失敗: テキスト領域を十分に検出できませんでした ({verificationCount} < {MINIMUM_REGIONS_FOR_SUCCESS})");
+                    }
+
+                    // 独立した検証フェーズを追加
+                    logBuilder.AppendLine("ステップ6: 独立した検証フェーズを実行");
+                    
+                    // 検証用にオリジナル設定を一時的に保存
+                    bool verificationPassed = false;
+                    string verificationDetails = "";
+                    
+                    try
+                    {
+                        // 検証基準を定義
+                        const int MIN_ACCEPTABLE_REGIONS = 1;  // 最低限検出すべきテキスト領域数
+                        const float MIN_ACCEPTABLE_CONFIDENCE = 0.4f;  // 最低限必要な平均信頼度
+                        const float CONFIDENCE_IMPROVEMENT_THRESHOLD = 1.1f;  // 10%以上の信頼度向上を意味のある改善と判断
+                        
+                        // 検証結果の詳細分析
+                        bool hasMinimumRegions = verificationCount >= MIN_ACCEPTABLE_REGIONS;
+                        bool hasAcceptableConfidence = averageConfidence >= MIN_ACCEPTABLE_CONFIDENCE;
+                        bool hasConfidenceImprovement = preOptimizationAvgConfidence > 0 && 
+                                                       (averageConfidence / preOptimizationAvgConfidence) >= CONFIDENCE_IMPROVEMENT_THRESHOLD;
+                        
+                        verificationDetails = $"検証基準: 最低領域数={MIN_ACCEPTABLE_REGIONS}, 最低信頼度={MIN_ACCEPTABLE_CONFIDENCE:F2}\n" +
+                                             $"検証結果: 領域数基準={hasMinimumRegions}, 信頼度基準={hasAcceptableConfidence}, 信頼度向上={hasConfidenceImprovement}";
+                        
+                        // 検証情報を結果に保存
+                        result.StageInfo.VerificationDetails = verificationDetails;
+                        result.AddDiagnosticInfo("VerificationCriteria", new {
+                            MinAcceptableRegions = MIN_ACCEPTABLE_REGIONS,
+                            MinAcceptableConfidence = MIN_ACCEPTABLE_CONFIDENCE,
+                            ConfidenceImprovementThreshold = CONFIDENCE_IMPROVEMENT_THRESHOLD,
+                            HasMinimumRegions = hasMinimumRegions,
+                            HasAcceptableConfidence = hasAcceptableConfidence,
+                            HasConfidenceImprovement = hasConfidenceImprovement
+                        });
+                        
+                        logBuilder.AppendLine(verificationDetails);
+                        
+                        // 全てのテキスト領域の信頼度分布を分析
+                        if (verificationCount > 0)
+                        {
+                            float minConfidence = verificationResult.Min(r => r.Confidence);
+                            float maxConfidence = verificationResult.Max(r => r.Confidence);
+                            
+                            // 信頼度の分布をログに記録
+                            logBuilder.AppendLine($"信頼度分布: 最小={minConfidence:F2}, 最大={maxConfidence:F2}, 平均={averageConfidence:F2}");
+                            
+                            // 信頼度のヒストグラムを作成（0.1刻みで分布を確認）
+                            var confidenceHistogram = new Dictionary<string, int>();
+                            for (float i = 0; i < 1.0f; i += 0.1f)
+                            {
+                                float lowerBound = i;
+                                float upperBound = i + 0.1f;
+                                int count = verificationResult.Count(r => r.Confidence >= lowerBound && r.Confidence < upperBound);
+                                confidenceHistogram.Add($"{lowerBound:F1}-{upperBound:F1}", count);
+                            }
+                            
+                            // ヒストグラムを結果に保存
+                            result.StageInfo.ConfidenceHistogram = confidenceHistogram;
+                            result.AddDiagnosticInfo("ConfidenceDistribution", new {
+                                Min = minConfidence,
+                                Max = maxConfidence,
+                                Average = averageConfidence,
+                                Histogram = confidenceHistogram
+                            });
+                            
+                            logBuilder.AppendLine("信頼度ヒストグラム:");
+                            foreach (var kvp in confidenceHistogram)
+                            {
+                                logBuilder.AppendLine($"  {kvp.Key}: {kvp.Value}個のテキスト領域");
+                            }
+                        }
+                        
+                        // 検証の最終判定
+                        // 基本条件: 最低限のテキスト領域があり、かつ最低限の信頼度を満たす
+                        // または、検出数は同じでも信頼度が大幅に向上している
+                        verificationPassed = (hasMinimumRegions && hasAcceptableConfidence) || 
+                                            (verificationCount >= preOptimizationRegionCount && hasConfidenceImprovement);
+                        
+                        // 検証結果を保存
+                        result.StageInfo.VerificationPassed = verificationPassed;
+                        result.VerificationSuccessful = verificationPassed;
+                        
+                        if (verificationPassed)
+                        {
+                            logBuilder.AppendLine("✓ 検証フェーズ: 合格");
+                        }
+                        else
+                        {
+                            logBuilder.AppendLine("✗ 検証フェーズ: 不合格");
+                            
+                            // 不合格の原因を詳細に記録
+                            StringBuilder failureReasons = new StringBuilder();
+                            
+                            if (!hasMinimumRegions)
+                            {
+                                logBuilder.AppendLine($"  - テキスト領域数が不足しています: {verificationCount} < {MIN_ACCEPTABLE_REGIONS}");
+                                failureReasons.AppendLine($"テキスト領域数が不足: {verificationCount} < {MIN_ACCEPTABLE_REGIONS}");
+                                result.AddRecommendedAction("テキストが多く表示された画面でもう一度試してください");
+                            }
+                            if (!hasAcceptableConfidence)
+                            {
+                                logBuilder.AppendLine($"  - 平均信頼度が基準未満です: {averageConfidence:F2} < {MIN_ACCEPTABLE_CONFIDENCE:F2}");
+                                failureReasons.AppendLine($"平均信頼度が基準未満: {averageConfidence:F2} < {MIN_ACCEPTABLE_CONFIDENCE:F2}");
+                                result.AddRecommendedAction("より鮮明なテキストの画面を選択してください");
+                            }
+                            if (!hasConfidenceImprovement && preOptimizationAvgConfidence > 0)
+                            {
+                                logBuilder.AppendLine($"  - 信頼度の向上が不十分です: {averageConfidence:F2} / {preOptimizationAvgConfidence:F2} = {averageConfidence / preOptimizationAvgConfidence:F2}");
+                                failureReasons.AppendLine($"信頼度の向上が不十分: {averageConfidence:F2} / {preOptimizationAvgConfidence:F2} = {averageConfidence / preOptimizationAvgConfidence:F2}");
+                            }
+                            
+                            // 失敗理由を保存
+                            result.StageInfo.FailureReason = failureReasons.ToString();
+                        }
+                    }
+                    catch (Exception verificationEx)
+                    {
+                        // 検証プロセス自体でエラーが発生した場合
+                        verificationPassed = false;
+                        string exMessage = $"検証フェーズでエラーが発生: {verificationEx.Message}";
+                        logBuilder.AppendLine($"! {exMessage}");
+                        
+                        result.StageInfo.VerificationPassed = false;
+                        result.StageInfo.FailureReason = exMessage;
+                        result.VerificationSuccessful = false;
+                        result.AddDiagnosticInfo("VerificationError", new {
+                            Message = verificationEx.Message,
+                            StackTrace = verificationEx.StackTrace
+                        });
+                        
+                        _logger.LogError("OCR設定検証中にエラーが発生しました", verificationEx);
+                    }
+                    
+                    // 最適化成功と検証成功の両方を満たす場合のみ最終的に成功
+                    bool finalSuccess = optimizationSuccessful && verificationPassed;
+                    result.StageInfo.FinalSuccess = finalSuccess;
+                    
+                    if (finalSuccess)
+                    {
+                        // 最適化結果を更新
+                        result.Status = OptimizationStatus.Success;
+                        result.Settings = new OptimalSettings
                         {
                             ConfidenceThreshold = optimalSettings.ConfidenceThreshold,
                             PreprocessingOptions = optimalSettings.ToPreprocessingOptions(),
                             LastOptimized = DateTime.Now,
                             OptimizationAttempts = 1,
                             IsOptimized = true,
-                            AiSuggestions = new Dictionary<string, object>()
+                            AiSuggestions = new Dictionary<string, object>
+                            {
+                                { "VerificationDetails", verificationDetails },
+                                { "ImprovedFromBaseline", optimizationSuccessful },
+                                { "PassedVerification", verificationPassed }
+                            },
+                            DetectedRegionsCount = verificationCount,
+                            AverageConfidence = averageConfidence
                         };
+                        result.DetectedRegionsCount = verificationCount;
+                        result.AverageConfidence = averageConfidence;
+                        
+                        // 詳細メッセージを設定
+                        result.SetDetailedMessage($"最適化に成功しました。テキスト領域数: {verificationCount}, 平均信頼度: {averageConfidence:F2}");
+                        if (preOptimizationRegionCount > 0)
+                        {
+                            result.SetDetailedMessage($"最適化前と比較して: 領域数変化 {preOptimizationRegionCount}→{verificationCount}, 信頼度変化 {preOptimizationAvgConfidence:F2}→{averageConfidence:F2}", true);
+                        }
+
+                        // 最適化履歴に保存
+                        _optimizationHistory[gameTitle] = result.Settings;
 
                         // 設定を保存
                         SaveOptimizationSettings();
 
-                        Logger.Instance.LogInfo($"OCR最適化が完了しました: {gameTitle} (検出テキスト領域: {verificationResult.Count})");
+                        logBuilder.AppendLine($"OCR最適化が完了しました: {gameTitle}");
+                        _logger.LogInfo($"OCR最適化が完了しました: {gameTitle} (検出テキスト領域: {verificationCount}, 平均信頼度: {averageConfidence:F2})");
                     }
                     else
                     {
-                        // 最適化が効果を発揮しなかった場合
-                        Logger.Instance.LogWarning($"OCR最適化を試みましたが、テキスト検出に失敗しました: {gameTitle}");
-                    }
+                        // 最適化または検証が失敗した場合
+                        if (!optimizationSuccessful)
+                        {
+                            result.Status = OptimizationStatus.FailedVerificationFailed;
+                            result.ErrorMessage = "最適化は検証テストに失敗しました。元の設定に戻します。";
+                            result.SetDetailedMessage("最適化で十分な改善が得られませんでした。元の設定に戻します。");
+                            
+                            // 推奨アクションを追加
+                            result.AddRecommendedAction("より鮮明でテキストが豊富な画面で再試行してください");
+                            result.AddRecommendedAction("スクリーンショットの品質を向上させてください");
+                        }
+                        else
+                        {
+                            result.Status = OptimizationStatus.FailedVerificationFailed;
+                            result.ErrorMessage = "追加検証フェーズで不合格となりました。元の設定に戻します。";
+                            result.SetDetailedMessage("設定は改善されましたが、検証基準を満たしませんでした。元の設定に戻します。");
+                            
+                            // 推奨アクションを追加
+                            result.AddRecommendedAction("別のゲーム画面で再試行してください");
+                            result.AddRecommendedAction("より明確なテキストが表示されているシーンを選択してください");
+                        }
 
-                    return optimizationSuccessful;
+                        RestoreOriginalSettings(currentManager, originalConfidenceThreshold, originalPreprocessingOptions, originalPreprocessingEnabled);
+                        logBuilder.AppendLine("元の設定に戻しました");
+
+                        _logger.LogWarning($"OCR最適化を試みましたが、検証に失敗しました: {gameTitle}");
+                    }
                 }
                 else
                 {
-                    Logger.Instance.LogWarning("OCRエンジンが適切な型ではないため、設定を適用できません");
-                    return false; // OCRエンジンが正しい型でない場合はfalseを返す
+                    result.Status = OptimizationStatus.FailedOtherError;
+                    result.ErrorMessage = "OCRエンジンが適切な型ではないため、設定を適用できません";
+                    result.SetDetailedMessage("OCRエンジンが対応していない型であるため、設定を適用できません。システム管理者に連絡してください。");
+                    logBuilder.AppendLine("エラー: OCRエンジンが適切な型ではありません");
+                    
+                    // 推奨アクションを追加
+                    result.AddRecommendedAction("アプリケーションを再起動してください");
+                    result.AddRecommendedAction("OCRエンジンの設定を確認してください");
+
+                    _logger.LogWarning("OCRエンジンが適切な型ではないため、設定を適用できません");
                 }
             }
             catch (Exception ex)
             {
-                Logger.Instance.LogError($"OCR最適化中にエラーが発生しました: {ex.Message}");
-                return false; // 例外発生時もfalseを返す
+                result.Status = OptimizationStatus.FailedOtherError;
+                result.ErrorMessage = $"OCR最適化中にエラーが発生しました: {ex.Message}";
+                result.SetDetailedMessage($"OCR最適化プロセス中に予期しないエラーが発生しました: {ex.Message}");
+                logBuilder.AppendLine($"エラー: {ex.Message}");
+                logBuilder.AppendLine($"スタックトレース: {ex.StackTrace}");
+                
+                // 診断情報を追加
+                result.AddDiagnosticInfo("Exception", new {
+                    Message = ex.Message,
+                    StackTrace = ex.StackTrace,
+                    ExceptionType = ex.GetType().Name
+                });
+                
+                // 推奨アクションを追加
+                result.AddRecommendedAction("アプリケーションを再起動してください");
+                result.AddRecommendedAction("問題が解決しない場合はログファイルを確認してください");
+
+                _logger.LogError($"OCR最適化中にエラーが発生しました: {ex.Message}", ex);
             }
+
+            // 結果のログを設定
+            result.DetailedLog = logBuilder.ToString();
+            stopwatch.Stop();
+            result.OptimizationTime = stopwatch.Elapsed;
+            return result;
+        }
+
+        // 元の設定を復元するヘルパーメソッド
+        private void RestoreOriginalSettings(OcrManager manager, float originalConfidenceThreshold,
+            GameTranslationOverlay.Core.Utils.PreprocessingOptions originalPreprocessingOptions, bool originalPreprocessingEnabled)
+        {
+            if (manager != null)
+            {
+                manager.SetConfidenceThreshold(originalConfidenceThreshold);
+                if (originalPreprocessingOptions != null)
+                {
+                    manager.SetPreprocessingOptions(originalPreprocessingOptions);
+                }
+                manager.EnablePreprocessing(originalPreprocessingEnabled);
+            }
+        }
+
+        // テキストを適切な長さに切り詰めるユーティリティメソッド
+        private string TruncateText(string text, int maxLength)
+        {
+            if (string.IsNullOrEmpty(text) || text.Length <= maxLength)
+                return text;
+
+            return text.Substring(0, maxLength) + "...";
         }
 
         // AIの結果からOCR設定を生成するメソッド
@@ -275,46 +821,53 @@ namespace GameTranslationOverlay.Core.OCR.AI
             int totalSamples = sampleSize * sampleSize;
             double totalBrightness = 0;
 
-            for (int y = 0; y < image.Height; y += image.Height / sampleSize)
+            int stepX = Math.Max(1, image.Width / sampleSize);
+            int stepY = Math.Max(1, image.Height / sampleSize);
+            int actualSamples = 0;
+
+            for (int y = 0; y < image.Height; y += stepY)
             {
-                for (int x = 0; x < image.Width; x += image.Width / sampleSize)
+                for (int x = 0; x < image.Width; x += stepX)
                 {
-                    Color pixel = image.GetPixel(x, y);
-                    totalBrightness += (pixel.R + pixel.G + pixel.B) / (3.0 * 255.0);
+                    if (x < image.Width && y < image.Height)
+                    {
+                        Color pixel = image.GetPixel(x, y);
+                        totalBrightness += (pixel.R + pixel.G + pixel.B) / (3.0 * 255.0);
+                        actualSamples++;
+                    }
                 }
             }
 
-            return totalBrightness / totalSamples;
+            return totalBrightness / actualSamples;
         }
 
         /// <summary>
         /// ゲームプロファイルから最適化設定を読み込んで適用する
         /// </summary>
         /// <param name="gameTitle">ゲームタイトル</param>
-        /// <param name="gameProfiles">ゲームプロファイル管理クラス</param>
         /// <returns>適用に成功した場合はtrue</returns>
-        public bool ApplyFromGameProfiles(string gameTitle, GameProfiles gameProfiles)
+        public bool ApplyFromProfiles(string gameTitle)
         {
-            if (string.IsNullOrWhiteSpace(gameTitle) || gameProfiles == null)
+            if (string.IsNullOrWhiteSpace(gameTitle))
             {
-                Debug.WriteLine("ゲームタイトルまたはプロファイルがnullのため、設定を適用できません");
+                _logger.LogWarning("ゲームタイトルがnullのため、設定を適用できません");
                 return false;
             }
 
             try
             {
                 // プロファイルから設定を取得
-                var settings = gameProfiles.GetProfile(gameTitle);
+                var settings = _gameProfiles.GetProfile(gameTitle);
                 if (settings == null)
                 {
-                    Debug.WriteLine($"ゲーム '{gameTitle}' のプロファイルが見つかりません");
+                    _logger.LogWarning($"ゲーム '{gameTitle}' のプロファイルが見つかりません");
                     return false;
                 }
 
                 // 設定が最適化済みか確認
                 if (!settings.IsOptimized)
                 {
-                    Debug.WriteLine($"ゲーム '{gameTitle}' のプロファイルは最適化されていません");
+                    _logger.LogWarning($"ゲーム '{gameTitle}' のプロファイルは最適化されていません");
                     return false;
                 }
 
@@ -328,18 +881,18 @@ namespace GameTranslationOverlay.Core.OCR.AI
                     // 最適化履歴に追加（既存の場合は上書き）
                     _optimizationHistory[gameTitle] = settings;
 
-                    Debug.WriteLine($"ゲーム '{gameTitle}' の最適化設定を適用しました（信頼度: {settings.ConfidenceThreshold:F2}）");
+                    _logger.LogInfo($"ゲーム '{gameTitle}' の最適化設定を適用しました（信頼度: {settings.ConfidenceThreshold:F2}）");
                     return true;
                 }
                 else
                 {
-                    Debug.WriteLine("OCRマネージャーが見つからないため、設定を適用できません");
+                    _logger.LogWarning("OCRマネージャーが見つからないため、設定を適用できません");
                     return false;
                 }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"ゲームプロファイル適用エラー: {ex.Message}");
+                _logger.LogError($"ゲームプロファイル適用エラー: {ex.Message}", ex);
                 return false;
             }
         }
@@ -353,7 +906,7 @@ namespace GameTranslationOverlay.Core.OCR.AI
         {
             if (string.IsNullOrWhiteSpace(gameTitle))
             {
-                Debug.WriteLine("Cannot apply settings: Game title is empty");
+                _logger.LogWarning("Cannot apply settings: Game title is empty");
                 return false;
             }
 
@@ -375,12 +928,12 @@ namespace GameTranslationOverlay.Core.OCR.AI
 
                     manager.EnablePreprocessing(!useOriginalImage);
 
-                    Debug.WriteLine($"Applied optimized settings for {gameTitle} (Preprocessing: {(!useOriginalImage ? "Enabled" : "Disabled")})");
+                    _logger.LogInfo($"Applied optimized settings for {gameTitle} (Preprocessing: {(!useOriginalImage ? "Enabled" : "Disabled")})");
                     return true;
                 }
             }
 
-            Debug.WriteLine($"No optimized settings found for {gameTitle}");
+            _logger.LogWarning($"No optimized settings found for {gameTitle}");
             return false;
         }
 
@@ -415,8 +968,168 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 ["IsOptimized"] = settings.IsOptimized,
                 ["LastOptimized"] = settings.LastOptimized,
                 ["OptimizationAttempts"] = settings.OptimizationAttempts,
-                ["ConfidenceThreshold"] = settings.ConfidenceThreshold
+                ["ConfidenceThreshold"] = settings.ConfidenceThreshold,
+                ["DetectedRegionsCount"] = settings.DetectedRegionsCount,
+                ["AverageConfidence"] = settings.AverageConfidence
             };
+        }
+
+        /// <summary>
+        /// ゲームのOCR設定を最適化し、結果と成功/失敗状態を返す
+        /// </summary>
+        /// <param name="gameTitle">ゲームタイトル</param>
+        /// <param name="sampleScreen">サンプル画像</param>
+        /// <returns>最適化が成功したかどうか</returns>
+        public async Task<OptimalSettings> OptimizeForGame(string gameTitle, Bitmap sampleScreen)
+        {
+            if (_visionClient == null)
+            {
+                throw new InvalidOperationException("AI最適化機能を利用するには、VisionServiceClientが必要です。");
+            }
+
+            var result = await OptimizeForGameAsync(gameTitle, sampleScreen);
+
+            // 以下のいずれかを使用（実際の実装によって異なります）
+
+            return result.Settings;
+        }
+
+        /// <summary>
+        /// ゲームのOCR設定の最適化結果をわかりやすいメッセージとして取得
+        /// </summary>
+        /// <param name="gameTitle">ゲームタイトル</param>
+        /// <returns>人間が読みやすい最適化結果の概要</returns>
+        public string GetOptimizationSummary(string gameTitle)
+        {
+            if (string.IsNullOrWhiteSpace(gameTitle) || !_optimizationHistory.TryGetValue(gameTitle, out var settings))
+            {
+                return "このゲームのOCR設定はまだ最適化されていません。";
+            }
+
+            StringBuilder summary = new StringBuilder();
+
+            if (settings.IsOptimized)
+            {
+                summary.AppendLine($"✓ {gameTitle} のOCR設定は正常に最適化されています。");
+                summary.AppendLine($"  • 最適化日時: {settings.LastOptimized:yyyy/MM/dd HH:mm}");
+                summary.AppendLine($"  • 検出テキスト領域数: {settings.DetectedRegionsCount}");
+                summary.AppendLine($"  • 平均信頼度: {settings.AverageConfidence:F2}");
+                summary.AppendLine($"  • 信頼度閾値: {settings.ConfidenceThreshold:F2}");
+
+                if (settings.AiSuggestions != null && settings.AiSuggestions.Count > 0)
+                {
+                    summary.AppendLine("  • AI分析結果:");
+                    foreach (var suggestion in settings.AiSuggestions)
+                    {
+                        if (suggestion.Key != "VerificationDetails") // 詳細情報は除外
+                        {
+                            summary.AppendLine($"    - {suggestion.Key}: {suggestion.Value}");
+                        }
+                    }
+                }
+            }
+            else
+            {
+                summary.AppendLine($"✗ {gameTitle} のOCR設定は最適化に失敗しました。");
+                summary.AppendLine($"  • 試行回数: {settings.OptimizationAttempts}");
+                summary.AppendLine($"  • 最終試行日時: {settings.LastOptimized:yyyy/MM/dd HH:mm}");
+            }
+
+            return summary.ToString();
+        }
+
+        /// <summary>
+        /// 最適化プロセスの詳細な診断情報を取得
+        /// </summary>
+        /// <param name="result">最適化結果オブジェクト</param>
+        /// <returns>診断情報の文字列表現</returns>
+        public string GetDiagnosticInformation(OptimizationResult result)
+        {
+            if (result == null) return "結果オブジェクトがnullです。";
+
+            StringBuilder diagnostics = new StringBuilder();
+            
+            diagnostics.AppendLine("=== OCR最適化診断情報 ===");
+            diagnostics.AppendLine($"状態: {result.Status}");
+            diagnostics.AppendLine($"実行時間: {result.OptimizationTime.TotalSeconds:F2}秒");
+            
+            if (!string.IsNullOrEmpty(result.ErrorMessage))
+            {
+                diagnostics.AppendLine($"エラー: {result.ErrorMessage}");
+            }
+            
+            if (!string.IsNullOrEmpty(result.DetailedMessage))
+            {
+                diagnostics.AppendLine($"詳細: {result.DetailedMessage}");
+            }
+            
+            // 各段階の情報
+            diagnostics.AppendLine("\n--- 各段階の実行結果 ---");
+            
+            // 段階1: 初期OCR
+            diagnostics.AppendLine("1. 初期OCR結果:");
+            diagnostics.AppendLine($"   検出領域数: {result.StageInfo.InitialDetectedRegions}");
+            diagnostics.AppendLine($"   平均信頼度: {result.StageInfo.InitialAverageConfidence:F2}");
+            
+            // 段階2: AI分析
+            diagnostics.AppendLine("\n2. AI分析結果:");
+            diagnostics.AppendLine($"   検出テキスト数: {result.StageInfo.AiDetectedTextRegions}");
+            if (result.StageInfo.AiDetectedTextSamples != null && result.StageInfo.AiDetectedTextSamples.Count > 0)
+            {
+                diagnostics.AppendLine("   テキストサンプル:");
+                foreach (var sample in result.StageInfo.AiDetectedTextSamples)
+                {
+                    diagnostics.AppendLine($"   - \"{TruncateText(sample, 50)}\"");
+                }
+            }
+            
+            // 段階3: 設定生成
+            if (result.StageInfo.GeneratedSettings != null)
+            {
+                var settings = result.StageInfo.GeneratedSettings;
+                diagnostics.AppendLine("\n3. 生成した設定:");
+                diagnostics.AppendLine($"   信頼度閾値: {settings.ConfidenceThreshold:F2}");
+                diagnostics.AppendLine($"   コントラスト: {settings.ContrastLevel:F2}");
+                diagnostics.AppendLine($"   明るさ: {settings.BrightnessLevel:F2}");
+                diagnostics.AppendLine($"   シャープネス: {settings.SharpnessLevel:F2}");
+                diagnostics.AppendLine($"   スケール: {settings.ScaleFactor:F2}");
+            }
+            
+            // 段階4: 初期テスト
+            diagnostics.AppendLine("\n4. 初期テスト結果:");
+            diagnostics.AppendLine($"   成功: {(result.StageInfo.InitialTestSuccessful ? "はい" : "いいえ")}");
+            if (!string.IsNullOrEmpty(result.StageInfo.InitialTestReason))
+            {
+                diagnostics.AppendLine($"   理由: {result.StageInfo.InitialTestReason}");
+            }
+            
+            // 段階5: 検証
+            diagnostics.AppendLine("\n5. 検証フェーズ結果:");
+            diagnostics.AppendLine($"   合格: {(result.StageInfo.VerificationPassed ? "はい" : "いいえ")}");
+            diagnostics.AppendLine($"   検出領域数: {result.StageInfo.VerificationDetectedRegions}");
+            diagnostics.AppendLine($"   平均信頼度: {result.StageInfo.VerificationAverageConfidence:F2}");
+            
+            if (!string.IsNullOrEmpty(result.StageInfo.VerificationDetails))
+            {
+                diagnostics.AppendLine($"   詳細: {result.StageInfo.VerificationDetails}");
+            }
+            
+            if (!string.IsNullOrEmpty(result.StageInfo.FailureReason))
+            {
+                diagnostics.AppendLine($"   失敗理由: {result.StageInfo.FailureReason}");
+            }
+            
+            // 推奨アクション
+            if (result.RecommendedActions != null && result.RecommendedActions.Count > 0)
+            {
+                diagnostics.AppendLine("\n--- 推奨アクション ---");
+                for (int i = 0; i < result.RecommendedActions.Count; i++)
+                {
+                    diagnostics.AppendLine($"{i+1}. {result.RecommendedActions[i]}");
+                }
+            }
+            
+            return diagnostics.ToString();
         }
 
         #endregion
@@ -433,54 +1146,52 @@ namespace GameTranslationOverlay.Core.OCR.AI
             try
             {
                 // 既存のOCRを使用して簡易チェック
-                Logger.Instance.LogDebug("OcrOptimizer", "HasSufficientText: OCR処理を開始");
+                _logger.LogDebug("OcrOptimizer", "HasSufficientText: OCR処理を開始");
                 var regions = await _ocrEngine.DetectTextRegionsAsync(image);
 
                 int totalChars = regions.Sum(r => r.Text?.Length ?? 0);
                 int regionCount = regions.Count;
 
-                Logger.Instance.LogDebug("OcrOptimizer", $"Text sufficiency check: {regionCount} regions, {totalChars} characters");
+                _logger.LogDebug("OcrOptimizer", $"Text sufficiency check: {regionCount} regions, {totalChars} characters");
 
                 // 各テキスト領域の内容をログに出力
                 for (int i = 0; i < regions.Count; i++)
                 {
-                    Logger.Instance.LogDebug("OcrOptimizer", $"領域{i + 1}: \"{regions[i].Text}\" (信頼度: {regions[i].Confidence})");
+                    _logger.LogDebug("OcrOptimizer", $"領域{i + 1}: \"{regions[i].Text}\" (信頼度: {regions[i].Confidence})");
                 }
 
                 // テキスト検出条件を常に満たすように修正
                 bool result = true; // 常にtrueを返す
-                Logger.Instance.LogDebug("OcrOptimizer", $"HasSufficientText: 結果 = {result} (条件無視して常に成功)");
+                _logger.LogDebug("OcrOptimizer", $"HasSufficientText: 結果 = {result} (条件無視して常に成功)");
                 return result;
             }
             catch (Exception ex)
             {
-                Logger.Instance.LogError($"テキスト十分性チェックでエラーが発生しました: {ex.Message}", ex);
-                Debug.WriteLine($"Error checking text sufficiency: {ex.Message}");
+                _logger.LogError($"テキスト十分性チェックでエラーが発生しました: {ex.Message}", ex);
                 return true; // エラー時も最適化を試みる
             }
         }
 
         private async Task<List<TextRegion>> ExtractTextWithAI(Bitmap image)
         {
-            Debug.WriteLine("ExtractTextWithAI: AI画像認識を実行");
+            _logger.LogDebug("OcrOptimizer", "ExtractTextWithAI: AI画像認識を実行");
 
             try
             {
                 // 言語検出とAPIの選択
                 bool isJapanese = await IsJapaneseTextDominant(image);
-                Debug.WriteLine($"言語検出結果: {(isJapanese ? "日本語" : "非日本語")}");
-
-                Debug.WriteLine($"選択したAPI: {(isJapanese ? "GPT-4 Vision" : "Gemini Vision")}");
+                _logger.LogDebug("OcrOptimizer", $"言語検出結果: {(isJapanese ? "日本語" : "非日本語")}");
+                _logger.LogDebug("OcrOptimizer", $"選択したAPI: {(isJapanese ? "GPT-4 Vision" : "Gemini Vision")}");
 
                 // API呼び出し
                 var regions = await _visionClient.ExtractTextFromImage(image, isJapanese);
-                Debug.WriteLine($"API呼び出し結果: {regions.Count}個のテキスト領域を検出");
+                _logger.LogDebug("OcrOptimizer", $"API呼び出し結果: {regions.Count}個のテキスト領域を検出");
 
                 return regions;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"AI画像認識中にエラー: {ex.Message}");
+                _logger.LogError($"AI画像認識中にエラー: {ex.Message}", ex);
                 throw;
             }
         }
@@ -498,7 +1209,7 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 // テキスト領域がない場合
                 if (regions == null || regions.Count == 0)
                 {
-                    Debug.WriteLine("テキスト領域が検出されなかったためデフォルトの英語と判断");
+                    _logger.LogDebug("OcrOptimizer", "テキスト領域が検出されなかったためデフォルトの英語と判断");
                     return false;
                 }
 
@@ -510,7 +1221,7 @@ namespace GameTranslationOverlay.Core.OCR.AI
 
                 if (validRegions.Count == 0)
                 {
-                    Debug.WriteLine("有効なテキスト領域が検出されなかったためデフォルトの英語と判断");
+                    _logger.LogDebug("OcrOptimizer", "有効なテキスト領域が検出されなかったためデフォルトの英語と判断");
                     return false;
                 }
 
@@ -520,19 +1231,19 @@ namespace GameTranslationOverlay.Core.OCR.AI
                 // テキストがない場合
                 if (string.IsNullOrWhiteSpace(allText))
                 {
-                    Debug.WriteLine("有効なテキストが検出されなかったためデフォルトの英語と判断");
+                    _logger.LogDebug("OcrOptimizer", "有効なテキストが検出されなかったためデフォルトの英語と判断");
                     return false;
                 }
 
                 // 言語を検出
                 bool isJapanese = IsJapaneseTextDominant(allText);
-                Debug.WriteLine($"言語検出結果: {(isJapanese ? "日本語" : "日本語以外")}, テキスト: {allText.Substring(0, Math.Min(50, allText.Length))}...");
+                _logger.LogDebug("OcrOptimizer", $"言語検出結果: {(isJapanese ? "日本語" : "日本語以外")}, テキスト: {allText.Substring(0, Math.Min(50, allText.Length))}...");
 
                 return isJapanese;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"日本語検出エラー: {ex.Message}");
+                _logger.LogError($"日本語検出エラー: {ex.Message}", ex);
                 return false;
             }
         }
@@ -751,46 +1462,19 @@ namespace GameTranslationOverlay.Core.OCR.AI
         {
             try
             {
-                // シリアライズ用のデータ構造に変換
-                var serializableData = new Dictionary<string, object>();
-                foreach (var pair in _optimizationHistory)
-                {
-                    var settings = pair.Value;
-                    serializableData[pair.Key] = new
-                    {
-                        ConfidenceThreshold = settings.ConfidenceThreshold,
-                        PreprocessingOptions = new
-                        {
-                            ContrastLevel = settings.PreprocessingOptions.ContrastLevel,
-                            BrightnessLevel = settings.PreprocessingOptions.BrightnessLevel,
-                            SharpnessLevel = settings.PreprocessingOptions.SharpnessLevel,
-                            NoiseReduction = settings.PreprocessingOptions.NoiseReduction,
-                            ScaleFactor = settings.PreprocessingOptions.ScaleFactor,
-                            Threshold = settings.PreprocessingOptions.Threshold,
-                            Padding = settings.PreprocessingOptions.Padding
-                        },
-                        LastOptimized = settings.LastOptimized.ToString("o"),
-                        OptimizationAttempts = settings.OptimizationAttempts,
-                        IsOptimized = settings.IsOptimized,
-                        AiSuggestions = settings.AiSuggestions
-                    };
-                }
-
-                // JSON形式で保存
-                string json = JsonSerializer.Serialize(serializableData, new JsonSerializerOptions
+                var options = new JsonSerializerOptions
                 {
                     WriteIndented = true
-                });
+                };
 
-                // ファイルに保存（暗号化オプション）
-                string encryptedJson = EncryptionHelper.EncryptWithAes(json, "GameTranslationOverlay");
-                File.WriteAllText(_settingsFilePath, encryptedJson);
+                string jsonString = JsonSerializer.Serialize(_optimizationHistory, options);
+                _fileSystem.WriteAllText(_settingsFilePath, jsonString);
 
-                Debug.WriteLine($"Saved OCR optimization settings to {_settingsFilePath}");
+                _logger.LogDebug("OcrOptimizer", $"最適化設定を保存しました: {_settingsFilePath}");
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error saving OCR optimization settings: {ex.Message}");
+                _logger.LogError($"最適化設定の保存に失敗しました: {ex.Message}", ex);
             }
         }
 
@@ -801,95 +1485,29 @@ namespace GameTranslationOverlay.Core.OCR.AI
         {
             try
             {
-                // ファイルが存在しない場合はスキップ
-                if (!File.Exists(_settingsFilePath))
+                if (_fileSystem.FileExists(_settingsFilePath))
                 {
-                    Debug.WriteLine("No OCR optimization settings file found");
-                    return;
-                }
-
-                // ファイルから読み込み（暗号化されている場合は復号化）
-                string encryptedJson = File.ReadAllText(_settingsFilePath);
-                string json = EncryptionHelper.DecryptWithAes(encryptedJson, "GameTranslationOverlay");
-
-                // JSONをデシリアライズ
-                var serializableData = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json);
-
-                // 設定をメモリに読み込み
-                _optimizationHistory.Clear();
-                foreach (var pair in serializableData)
-                {
-                    var gameTitle = pair.Key;
-                    var data = pair.Value;
-
-                    // 基本設定
-                    float confidenceThreshold = data.GetProperty("ConfidenceThreshold").GetSingle();
-                    DateTime lastOptimized = DateTime.Parse(data.GetProperty("LastOptimized").GetString());
-                    int optimizationAttempts = data.GetProperty("OptimizationAttempts").GetInt32();
-                    bool isOptimized = data.GetProperty("IsOptimized").GetBoolean();
-
-                    // 前処理オプション
-                    var preprocessingData = data.GetProperty("PreprocessingOptions");
-                    var preprocessingOptions = new GameTranslationOverlay.Core.Utils.PreprocessingOptions
+                    string jsonString = _fileSystem.ReadAllText(_settingsFilePath);
+                    
+                    if (!string.IsNullOrEmpty(jsonString))
                     {
-                        ContrastLevel = preprocessingData.GetProperty("ContrastLevel").GetSingle(),
-                        BrightnessLevel = preprocessingData.GetProperty("BrightnessLevel").GetSingle(),
-                        SharpnessLevel = preprocessingData.GetProperty("SharpnessLevel").GetSingle(),
-                        NoiseReduction = preprocessingData.GetProperty("NoiseReduction").GetInt32(),
-                        ScaleFactor = preprocessingData.GetProperty("ScaleFactor").GetSingle()
-                    };
-
-                    // Thresholdプロパティがあれば設定
-                    if (preprocessingData.TryGetProperty("Threshold", out var thresholdValue))
-                    {
-                        preprocessingOptions.Threshold = thresholdValue.GetInt32();
-                    }
-
-                    // Paddingプロパティがあれば設定
-                    if (preprocessingData.TryGetProperty("Padding", out var paddingValue))
-                    {
-                        preprocessingOptions.Padding = paddingValue.GetInt32();
-                    }
-
-                    // AIサジェスションがあれば設定
-                    Dictionary<string, object> aiSuggestions = new Dictionary<string, object>();
-                    if (data.TryGetProperty("AiSuggestions", out var suggestionsElement))
-                    {
-                        foreach (var prop in suggestionsElement.EnumerateObject())
+                        var settings = JsonSerializer.Deserialize<Dictionary<string, OptimalSettings>>(jsonString);
+                        if (settings != null)
                         {
-                            if (prop.Value.ValueKind == JsonValueKind.String)
+                            _optimizationHistory.Clear();
+                            foreach (var item in settings)
                             {
-                                aiSuggestions[prop.Name] = prop.Value.GetString();
+                                _optimizationHistory[item.Key] = item.Value;
                             }
-                            else if (prop.Value.ValueKind == JsonValueKind.Number)
-                            {
-                                aiSuggestions[prop.Name] = prop.Value.GetDouble();
-                            }
-                            else if (prop.Value.ValueKind == JsonValueKind.True || prop.Value.ValueKind == JsonValueKind.False)
-                            {
-                                aiSuggestions[prop.Name] = prop.Value.GetBoolean();
-                            }
+
+                            _logger.LogDebug("OcrOptimizer", $"{_optimizationHistory.Count}個の最適化プロファイルを読み込みました");
                         }
                     }
-
-                    // 設定をメモリに追加
-                    _optimizationHistory[gameTitle] = new OptimalSettings
-                    {
-                        ConfidenceThreshold = confidenceThreshold,
-                        PreprocessingOptions = preprocessingOptions,
-                        LastOptimized = lastOptimized,
-                        OptimizationAttempts = optimizationAttempts,
-                        IsOptimized = isOptimized,
-                        AiSuggestions = aiSuggestions
-                    };
                 }
-
-                Debug.WriteLine($"Loaded OCR optimization settings for {_optimizationHistory.Count} games");
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error loading OCR optimization settings: {ex.Message}");
-                _optimizationHistory.Clear();
+                _logger.LogError($"最適化設定の読み込みに失敗しました: {ex.Message}", ex);
             }
         }
 
@@ -983,14 +1601,17 @@ namespace GameTranslationOverlay.Core.OCR.AI
             {
                 for (int x = 0; x < image.Width; x += sampleStep)
                 {
-                    Color pixel = image.GetPixel(x, y);
-                    int brightness = (int)(0.299 * pixel.R + 0.587 * pixel.G + 0.114 * pixel.B);
+                    if (x < image.Width && y < image.Height)
+                    {
+                        Color pixel = image.GetPixel(x, y);
+                        int brightness = (int)(0.299 * pixel.R + 0.587 * pixel.G + 0.114 * pixel.B);
 
-                    totalBrightness += brightness;
-                    minBrightness = Math.Min(minBrightness, brightness);
-                    maxBrightness = Math.Max(maxBrightness, brightness);
+                        totalBrightness += brightness;
+                        minBrightness = Math.Min(minBrightness, brightness);
+                        maxBrightness = Math.Max(maxBrightness, brightness);
 
-                    samplesCount++;
+                        samplesCount++;
+                    }
                 }
             }
 
@@ -1084,5 +1705,57 @@ namespace GameTranslationOverlay.Core.OCR.AI
             };
         }
     }
+
+    /// <summary>
+    /// ファイルシステム操作のインターフェース
+    /// ユニットテストの容易化とシステム依存の低減のため
+    /// </summary>
+    public interface IFileSystem
+    {
+        bool FileExists(string path);
+        bool DirectoryExists(string path);
+        void CreateDirectory(string path);
+        string ReadAllText(string path);
+        void WriteAllText(string path, string contents);
+    }
+
+    /// <summary>
+    /// 標準ファイルシステム操作の実装
+    /// </summary>
+    public class StandardFileSystem : IFileSystem
+    {
+        public bool FileExists(string path) => File.Exists(path);
+        public bool DirectoryExists(string path) => Directory.Exists(path);
+        public void CreateDirectory(string path) => Directory.CreateDirectory(path);
+        public string ReadAllText(string path) => File.ReadAllText(path);
+        public void WriteAllText(string path, string contents) => File.WriteAllText(path, contents);
+    }
+
+    /// <summary>
+    /// 環境サービスのインターフェース
+    /// システム環境への依存を抽象化
+    /// </summary>
+    public interface IEnvironmentService
+    {
+        string GetFolderPath(Environment.SpecialFolder folder);
+    }
+
+    /// <summary>
+    /// 標準環境サービスの実装
+    /// </summary>
+    public class StandardEnvironmentService : IEnvironmentService
+    {
+        public string GetFolderPath(Environment.SpecialFolder folder) => Environment.GetFolderPath(folder);
+    }
+
+    /// <summary>
+    /// ゲームプロファイル管理のインターフェース
+    /// </summary>
+    public interface IGameProfiles
+    {
+        OcrOptimizer.OptimalSettings GetProfile(string gameTitle);
+        void SaveProfile(string gameTitle, OcrOptimizer.OptimalSettings settings);
+    }
+
     #endregion
 }

@@ -1,29 +1,35 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
 using System.Diagnostics;
 using System.Drawing;
-using System.Windows.Forms;
-using System.Runtime.InteropServices;
-using System.Threading.Tasks;
-using System.Linq;
 using System.IO;
-// 名前空間の衝突を解決するためのエイリアス
-using OCRNamespace = GameTranslationOverlay.Core.OCR;
-using UtilsNamespace = GameTranslationOverlay.Core.Utils;
-// PreprocessingOptionsの名前空間を正しく指定
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using GameTranslationOverlay.Core.OCR;
+using GameTranslationOverlay.Core.Models;
+using GameTranslationOverlay.Core.Translation;
+using GameTranslationOverlay.Core.Configuration;
 using GameTranslationOverlay.Core.Utils;
-// 他の名前空間は通常どおりインポート
 using GameTranslationOverlay.Core.UI;
 using GameTranslationOverlay.Forms;
 using GameTranslationOverlay.Utils;
-using GameTranslationOverlay.Core.Models;
 using GameTranslationOverlay.Core.Translation.Services;
 using GameTranslationOverlay.Core.Translation.Interfaces;
 using GameTranslationOverlay.Core.Licensing;
 using GameTranslationOverlay.Core.OCR.AI;
-using GameTranslationOverlay.Core.Configuration;
+using GameTranslationOverlay.Core.Diagnostics;
+// 名前空間の衝突を解決するためのエイリアス
+using OCRNamespace = GameTranslationOverlay.Core.OCR;
+using UtilsNamespace = GameTranslationOverlay.Core.Utils;
+using AIOptimizer = GameTranslationOverlay.Core.OCR.AI.OcrOptimizer;
+using CoreLicenseManager = GameTranslationOverlay.Core.Licensing.LicenseManager;
 using TranslationLanguageManager = GameTranslationOverlay.Core.Translation.Services.LanguageManager;
 using UILanguageManager = GameTranslationOverlay.Core.UI.LanguageManager;
-using System.Collections.Generic;
 
 namespace GameTranslationOverlay
 {
@@ -31,6 +37,9 @@ namespace GameTranslationOverlay
     {
         [DllImport("user32.dll")]
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindow(IntPtr hWnd);
 
         private Button _selectWindowButton;
         private Button _startTranslationButton;
@@ -60,7 +69,7 @@ namespace GameTranslationOverlay
         private const uint SWP_NOSIZE = 0x0001;
 
         private Button _optimizeOcrButton;
-        private OcrOptimizer _ocrOptimizer;
+        private AIOptimizer _ocrOptimizer;
         private GameProfiles _gameProfiles;
 
         private Button _benchmarkButton; // 参照があるので宣言だけ残す
@@ -370,26 +379,57 @@ namespace GameTranslationOverlay
                         // 初回実行時にOCROptimizerを初期化
                         if (_ocrOptimizer == null)
                         {
-                            _ocrOptimizer = new OcrOptimizer(_ocrManager);
+                            // OcrOptimizerの初期化に必要なクラスを直接生成
+                            var fileSystem = new GameTranslationOverlay.Core.OCR.AI.StandardFileSystem();
+                            var environmentService = new GameTranslationOverlay.Core.OCR.AI.StandardEnvironmentService();
+                            
+                            _ocrOptimizer = new AIOptimizer(
+                                _ocrManager, 
+                                null, // VisionServiceClientがない場合はnull
+                                null, // LanguageDetectorがない場合はnull
+                                Logger.Instance, // Loggerをそのまま渡す
+                                fileSystem,
+                                _gameProfiles,
+                                environmentService
+                            );
                         }
 
                         // テキスト分析
                         progressOverlay.UpdateStatus(OptimizationProgressOverlay.OptimizationStep.AnalyzingText);
+                        progressOverlay.SetDetailedStatus("テキスト検出と言語分析を実行中...");
 
-                        // 最適化を実行
+                        // 最適化を実行（拡張された結果を取得）
                         progressOverlay.UpdateStatus(OptimizationProgressOverlay.OptimizationStep.GeneratingSettings);
-                        bool optimizationSuccessful = await _ocrOptimizer.OptimizeForGame(gameTitle, screenshot);
+                        progressOverlay.SetDetailedStatus("最適なOCR設定を生成中...");
+                        var optimizationResult = await _ocrOptimizer.OptimizeForGameAsync(gameTitle, screenshot);
 
-                        if (optimizationSuccessful)
+                        // 結果に基づいて適切なフィードバックを表示
+                        if (optimizationResult.IsSuccessful)
                         {
                             // 最適化設定を適用
                             progressOverlay.UpdateStatus(OptimizationProgressOverlay.OptimizationStep.ApplyingOptimization);
+                            progressOverlay.SetDetailedStatus("最適化された設定を適用中...");
 
                             // 成功を記録
                             ApiUsageManager.Instance.RecordApiCall(gameTitle, true);
 
                             progressOverlay.UpdateStatus(OptimizationProgressOverlay.OptimizationStep.Completed, 100);
-                            await Task.Delay(1500); // 完了メッセージを表示する時間
+                            
+                            // 詳細な結果を表示
+                            string successMessage = 
+                                $"OCR設定の最適化が完了しました！\n\n" +
+                                $"検出テキスト領域: {optimizationResult.DetectedRegionsCount}個\n" +
+                                $"平均信頼度: {optimizationResult.AverageConfidence:F2}\n\n" +
+                                $"この設定がゲーム '{gameTitle}' に適用されました。";
+                            
+                            await Task.Delay(1000); // 完了メッセージを表示する時間
+                            
+                            MessageBox.Show(
+                                successMessage,
+                                "最適化完了",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Information
+                            );
 
                             UpdateStatus($"{gameTitle} のOCR設定を最適化しました");
                         }
@@ -399,10 +439,70 @@ namespace GameTranslationOverlay
                             ApiUsageManager.Instance.RecordApiCall(gameTitle, false);
 
                             progressOverlay.UpdateStatus(OptimizationProgressOverlay.OptimizationStep.Failed, 100);
-                            await Task.Delay(1500); // 失敗メッセージを表示する時間
+                            
+                            // 失敗の詳細理由を表示
+                            string failureMessage = "OCR設定の最適化に失敗しました。\n\n";
+                            
+                            switch (optimizationResult.Status)
+                            {
+                                case AIOptimizer.OptimizationStatus.FailedNoTextDetected:
+                                    failureMessage += "テキストが検出できませんでした。テキストが明確に表示されている画面で再試行してください。";
+                                    break;
+                                case AIOptimizer.OptimizationStatus.FailedVerificationFailed:
+                                    failureMessage += "設定の検証に失敗しました。より鮮明なテキストが表示された画面で再試行してください。";
+                                    break;
+                                case AIOptimizer.OptimizationStatus.FailedAIError:
+                                    failureMessage += "AI分析中にエラーが発生しました。インターネット接続を確認し、しばらく時間をおいて再試行してください。";
+                                    break;
+                                default:
+                                    failureMessage += optimizationResult.ErrorMessage ?? "不明なエラーが発生しました。";
+                                    break;
+                            }
+                            
+                            // 推奨アクションがあれば表示
+                            if (optimizationResult.RecommendedActions != null && optimizationResult.RecommendedActions.Count > 0)
+                            {
+                                failureMessage += "\n\n推奨アクション:";
+                                foreach (var action in optimizationResult.RecommendedActions.Take(3)) // 最大3つまで表示
+                                {
+                                    failureMessage += $"\n• {action}";
+                                }
+                            }
+                            
+                            await Task.Delay(1000); // 失敗メッセージを表示する時間
+                            
+                            MessageBox.Show(
+                                failureMessage,
+                                "最適化失敗",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Warning
+                            );
 
-                            UpdateStatus($"{gameTitle} のOCR設定の最適化に失敗しました。AI翻訳モードの使用をお勧めします。");
+                            UpdateStatus($"{gameTitle} のOCR設定の最適化に失敗しました。AI翻訳モードの使用をお勧めします。", true);
+                            
+                            // 詳細な診断情報をログに記録
+                            if (!string.IsNullOrEmpty(optimizationResult.DetailedLog))
+                            {
+                                Debug.WriteLine($"=== OCR最適化詳細ログ ===\n{optimizationResult.DetailedLog}");
+                            }
                         }
+                        
+                        // 開発者向け詳細なダイアログを表示するオプション（デバッグビルドのみ）
+                        #if DEBUG
+                        if (ModifierKeys.HasFlag(Keys.Control))
+                        {
+                            // 開発者モードで詳細情報を表示
+                            var diagnosticInfo = _ocrOptimizer.GetDiagnosticInformation(optimizationResult);
+                            
+                            // TextDisplayFormがない場合は、代わりにMessageBoxを使用
+                            MessageBox.Show(
+                                diagnosticInfo,
+                                "OCR最適化診断情報",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Information
+                            );
+                        }
+                        #endif
                     }
                 }
                 catch (Exception ex)
@@ -411,7 +511,7 @@ namespace GameTranslationOverlay
                     ApiUsageManager.Instance.RecordApiCall(gameTitle, false);
 
                     progressOverlay.UpdateStatus(OptimizationProgressOverlay.OptimizationStep.Failed);
-                    await Task.Delay(1500); // エラーメッセージを表示する時間
+                    await Task.Delay(1000); // エラーメッセージを表示する時間
 
                     // エラーメッセージの詳細化
                     if (ex.Message.Contains("テキストが十分に表示されていません"))
@@ -427,10 +527,17 @@ namespace GameTranslationOverlay
                     }
                     else
                     {
-                        MessageBox.Show($"最適化中にエラーが発生しました: {ex.Message}", "エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        MessageBox.Show(
+                            $"最適化中にエラーが発生しました: {ex.Message}\n\n" +
+                            $"スタックトレース: {ex.StackTrace.Substring(0, Math.Min(ex.StackTrace.Length, 200))}...", 
+                            "エラー", 
+                            MessageBoxButtons.OK, 
+                            MessageBoxIcon.Error
+                        );
                     }
 
                     UpdateStatus("OCR最適化エラー", true);
+                    Debug.WriteLine($"OCR最適化エラー: {ex}");
                 }
             }
         }
@@ -537,7 +644,7 @@ namespace GameTranslationOverlay
 
                 if (useAI)
                 {
-                    if (!LicenseManager.Instance.HasFeature(PremiumFeature.AiTranslation))
+                    if (!CoreLicenseManager.Instance.HasFeature(PremiumFeature.AiTranslation))
                     {
                         MessageBox.Show(
                             "AI翻訳機能はPro版ライセンスが必要です。",
@@ -692,7 +799,7 @@ namespace GameTranslationOverlay
 
         private void UpdateAITranslationCheckboxState()
         {
-            bool hasAiFeature = LicenseManager.Instance.HasFeature(PremiumFeature.AiTranslation);
+            bool hasAiFeature = CoreLicenseManager.Instance.HasFeature(PremiumFeature.AiTranslation);
 
             // ライセンスに基づいてチェックボックスの有効/無効を設定
             _useAITranslationCheckBox.Enabled = hasAiFeature;
@@ -707,7 +814,7 @@ namespace GameTranslationOverlay
             toolTip.SetToolTip(_useAITranslationCheckBox, tooltipText);
 
             // ライセンス情報をステータスに表示
-            UpdateStatus($"ライセンス: {LicenseManager.Instance.CurrentLicenseType}");
+            UpdateStatus($"ライセンス: {CoreLicenseManager.Instance.CurrentLicenseType}");
         }
 
         private async void InitializeServices()
@@ -728,7 +835,19 @@ namespace GameTranslationOverlay
                 // オプティマイザーの初期化
                 if (_ocrManager != null)
                 {
-                    _ocrOptimizer = new OcrOptimizer(_ocrManager);
+                    // OcrOptimizerの初期化に必要なクラスを直接生成
+                    var fileSystem = new GameTranslationOverlay.Core.OCR.AI.StandardFileSystem();
+                    var environmentService = new GameTranslationOverlay.Core.OCR.AI.StandardEnvironmentService();
+                    
+                    _ocrOptimizer = new AIOptimizer(
+                        _ocrManager, 
+                        null, // VisionServiceClientがない場合はnull
+                        null, // LanguageDetectorがない場合はnull
+                        Logger.Instance, // Loggerをそのまま渡す
+                        fileSystem,
+                        _gameProfiles,
+                        environmentService
+                    );
                     Debug.WriteLine("InitializeServices: OCRオプティマイザー初期化完了");
                 }
 
@@ -893,37 +1012,80 @@ namespace GameTranslationOverlay
 
         private void SelectWindowButton_Click(object sender, EventArgs e)
         {
-            using (var selectorForm = new WindowSelectorForm())
+            try
             {
-                if (selectorForm.ShowDialog(this) == DialogResult.OK)
+                // 現在の選択をリセット
+                _selectedWindow = null;
+                _startTranslationButton.Enabled = false;
+                _toggleTextDetectionButton.Enabled = false;
+                _optimizeOcrButton.Enabled = false;
+
+                // ウィンドウ選択ダイアログを表示
+                using (var selectorForm = new WindowSelectorForm())
                 {
-                    _selectedWindow = selectorForm.SelectedWindow;
-                    if (_selectedWindow != null)
+                    UpdateStatus("ウィンドウを選択してください...");
+                    
+                    if (selectorForm.ShowDialog(this) == DialogResult.OK)
                     {
-                        _startTranslationButton.Enabled = true;
-                        UpdateStatus($"選択: {_selectedWindow.Title}");
-
-                        // オーバーレイフォームに対象ウィンドウを設定
-                        if (_overlayForm != null)
+                        _selectedWindow = selectorForm.SelectedWindow;
+                        if (_selectedWindow != null && _selectedWindow.Handle != IntPtr.Zero)
                         {
-                            // ウィンドウを選択した後にオーバーレイとテキスト検出を設定
-                            _overlayForm.SetTargetWindow(_selectedWindow.Handle);
-                            _checkWindowTimer.Start();
+                            // UI状態を更新
+                            _startTranslationButton.Enabled = true;
                             _toggleTextDetectionButton.Enabled = true;
+                            _optimizeOcrButton.Enabled = true;
                             
-                            // この時点でテキスト検出を開始（ウィンドウ選択後）
-                            _overlayForm.StartTextDetection();
+                            UpdateStatus($"選択: {_selectedWindow.Title}");
+                            Debug.WriteLine($"ウィンドウ選択: {_selectedWindow.Title} (Handle: {_selectedWindow.Handle})");
 
-                            UpdateStatus($"翻訳実行中: {_selectedWindow.Title}");
+                            // オーバーレイフォームに対象ウィンドウを設定
+                            if (_overlayForm != null && !_overlayForm.IsDisposed)
+                            {
+                                // ウィンドウを選択した後にオーバーレイとテキスト検出を設定
+                                _overlayForm.SetTargetWindow(_selectedWindow.Handle);
+                                
+                                // テキスト検出を開始
+                                _overlayForm.StartTextDetection();
+                                
+                                // ウィンドウ監視タイマーを開始
+                                _checkWindowTimer.Start();
+                                
+                                UpdateStatus($"翻訳実行中: {_selectedWindow.Title}");
+                                
+                                // プロファイルの適用
+                                ApplyGameProfile(_selectedWindow.Title);
+                                
+                                // テキスト検出ボタンのテキストを更新
+                                _toggleTextDetectionButton.Text = "テキスト検出 OFF";
+                            }
+                            else
+                            {
+                                Debug.WriteLine("オーバーレイフォームが初期化されていないか、破棄されています。");
+                                UpdateStatus("オーバーレイ初期化エラー", true);
+                            }
                         }
+                        else
+                        {
+                            UpdateStatus("有効なウィンドウが選択されませんでした", true);
+                        }
+                    }
+                    else
+                    {
+                        // ユーザーがキャンセルした場合
+                        UpdateStatus("ウィンドウ選択がキャンセルされました");
                     }
                 }
             }
-            // プロファイルの適用を追加
-            if (_selectedWindow != null)
+            catch (Exception ex)
             {
-                // 選択したゲームのプロファイルを適用
-                ApplyGameProfile(_selectedWindow.Title);
+                Debug.WriteLine($"ウィンドウ選択エラー: {ex.Message}\n{ex.StackTrace}");
+                UpdateStatus($"ウィンドウ選択エラー: {ex.Message}", true);
+                MessageBox.Show(
+                    $"ウィンドウ選択中にエラーが発生しました:\n{ex.Message}",
+                    "エラー",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
             }
         }
 
@@ -959,22 +1121,117 @@ namespace GameTranslationOverlay
 
         private void StartTranslationButton_Click(object sender, EventArgs e)
         {
-            if (_selectedWindow != null && _overlayForm != null)
+            try
             {
+                if (_selectedWindow == null || _selectedWindow.Handle == IntPtr.Zero)
+                {
+                    MessageBox.Show(
+                        "有効なウィンドウが選択されていません。\nまず「翻訳対象ウィンドウを選択」ボタンをクリックしてください。",
+                        "ウィンドウ未選択",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                    return;
+                }
+
+                if (_overlayForm == null || _overlayForm.IsDisposed)
+                {
+                    Debug.WriteLine("オーバーレイフォームが初期化されていないか、破棄されています。再作成します。");
+                    // オーバーレイフォームを再作成
+                    _overlayForm = new OverlayForm(_ocrManager, _translationManager);
+                }
+
+                // ウィンドウが有効かチェック
+                if (!IsWindow(_selectedWindow.Handle))
+                {
+                    MessageBox.Show(
+                        "選択したウィンドウは現在表示されていません。\n別のウィンドウを選択するか、対象のアプリケーションを開いてください。",
+                        "ウィンドウ非表示",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                    return;
+                }
+
+                // オーバーレイフォームに対象ウィンドウを設定
                 _overlayForm.SetTargetWindow(_selectedWindow.Handle);
+                
+                // テキスト検出を開始
+                _overlayForm.StartTextDetection();
+                
+                // ウィンドウ監視タイマーを開始
                 _checkWindowTimer.Start();
+                
+                // テキスト検出ボタンを有効化し、テキストを更新
                 _toggleTextDetectionButton.Enabled = true;
+                _toggleTextDetectionButton.Text = "テキスト検出 OFF";
+                
+                // 状態を更新
                 UpdateStatus($"翻訳実行中: {_selectedWindow.Title}");
+                
+                // プロファイルの適用（まだ適用されていない場合）
+                ApplyGameProfile(_selectedWindow.Title);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"翻訳開始エラー: {ex.Message}\n{ex.StackTrace}");
+                UpdateStatus($"翻訳開始エラー: {ex.Message}", true);
+                MessageBox.Show(
+                    $"翻訳開始中にエラーが発生しました:\n{ex.Message}",
+                    "エラー",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
             }
         }
 
         private void ToggleTextDetectionButton_Click(object sender, EventArgs e)
         {
-            if (_overlayForm != null)
+            try
             {
-                bool newState = _overlayForm.ToggleTextDetection();
-                _toggleTextDetectionButton.Text = newState ? "テキスト検出 OFF" : "テキスト検出 ON";
-                UpdateStatus($"テキスト検出: {(newState ? "有効" : "無効")}");
+                if (_overlayForm == null || _overlayForm.IsDisposed)
+                {
+                    Debug.WriteLine("オーバーレイフォームが初期化されていないか、破棄されています。");
+                    MessageBox.Show(
+                        "テキスト検出の切り替えができません。\nアプリケーションを再起動してください。",
+                        "オーバーレイエラー",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                    return;
+                }
+
+                if (_selectedWindow == null || _selectedWindow.Handle == IntPtr.Zero)
+                {
+                    MessageBox.Show(
+                        "有効なウィンドウが選択されていません。\nまず「翻訳対象ウィンドウを選択」ボタンをクリックしてください。",
+                        "ウィンドウ未選択",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                    return;
+                }
+
+                // テキスト検出の切替
+                bool isDetectionActive = _overlayForm.ToggleTextDetection();
+                
+                // ボタンテキストとステータスの更新
+                _toggleTextDetectionButton.Text = isDetectionActive ? "テキスト検出 OFF" : "テキスト検出 ON";
+                UpdateStatus($"テキスト検出: {(isDetectionActive ? "有効" : "無効")}");
+                
+                // ログ出力
+                Debug.WriteLine($"テキスト検出切替: {(isDetectionActive ? "有効" : "無効")}");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"テキスト検出切替エラー: {ex.Message}\n{ex.StackTrace}");
+                UpdateStatus($"テキスト検出切替エラー: {ex.Message}", true);
+                MessageBox.Show(
+                    $"テキスト検出の切替中にエラーが発生しました:\n{ex.Message}",
+                    "エラー",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
             }
         }
 
